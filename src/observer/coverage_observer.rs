@@ -1,7 +1,10 @@
-use alloc::borrow::Cow;
-use libafl::executors::ExitKind;
-use libafl::observers::{MapObserver, Observer, StdMapObserver};
-use libafl::prelude::*;
+use std::borrow::Cow;
+
+use libafl::{
+    executors::ExitKind,
+    observers::{MapObserver, Observer, StdMapObserver},
+    prelude::{Error, ObserverWithHashField},
+};
 use libafl_bolts::Named;
 use serde::{Deserialize, Serialize};
 

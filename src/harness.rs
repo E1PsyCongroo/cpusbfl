@@ -28,6 +28,8 @@ unsafe extern "C" {
 
     pub fn get_cover_number() -> c_uint;
 
+    pub fn get_cover_point_name(i: usize) -> *const c_char;
+
     pub fn update_stats(bitmap: *mut c_uchar);
 
     pub fn display_uncovered_points();
@@ -64,8 +66,8 @@ fn sim_run(workload: &String) -> i32 {
 
     // send simulation arguments to sim_main and get the return code
     let ret = unsafe { sim_main(sim_args.len() as i32, p_argv.as_ptr()) };
-    unsafe { update_stats(cover_as_mut_ptr()) }
-    cover_accumulate();
+    all_cover_update_stats();
+    all_cover_accumulate();
 
     ret
 }
@@ -100,7 +102,9 @@ pub(crate) fn fuzz_harness(input: &BytesInput) -> ExitKind {
     let ret = sim_run_from_memory(input);
 
     // get coverage
-    cover_display();
+    for cover_name in cover_names() {
+        cover_display(cover_name);
+    }
     io::stdout().flush().unwrap();
 
     // save the target testcase into disk
@@ -116,10 +120,7 @@ pub(crate) fn fuzz_harness(input: &BytesInput) -> ExitKind {
     }
 }
 
-pub(crate) fn set_sim_env(coverage: String, verbose: bool, emu_args: Vec<String>) {
-    let cover_name = CString::new(coverage.as_bytes()).unwrap();
-    unsafe { set_cover_feedback(cover_name.as_ptr()) }
-
+pub(crate) fn set_sim_env(cover_names: String, verbose: bool, emu_args: Vec<String>) {
     if verbose {
         unsafe { enable_sim_verbose() }
     } else {
@@ -128,5 +129,12 @@ pub(crate) fn set_sim_env(coverage: String, verbose: bool, emu_args: Vec<String>
 
     let _ = SIM_ARGS.set(Mutex::new(emu_args));
 
-    cover_init();
+    cover_init(
+        cover_names
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect(),
+    );
 }
+

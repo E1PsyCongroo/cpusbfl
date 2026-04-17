@@ -1,3 +1,4 @@
+mod bugloc;
 /**
  * Copyright (c) 2023 Institute of Computing Technology, Chinese Academy of Sciences
  * xfuzz is licensed under Mulan PSL v2.
@@ -10,12 +11,11 @@
  * See the Mulan PSL v2 for more details.
  */
 mod coverage;
-mod coverage_feedback;
-mod coverage_observer;
+mod feedback;
+mod fuzzer;
 mod harness;
 mod monitor;
-mod fuzzer;
-mod bugloc;
+mod observer;
 
 use clap::Parser;
 
@@ -83,7 +83,7 @@ fn main() -> i32 {
                 }
             }
         }
-        coverage::cover_display();
+        coverage::all_cover_display();
     }
 
     if args.fuzzing {
@@ -93,10 +93,9 @@ fn main() -> i32 {
             args.top_pass,
             args.corpus_input,
             args.corpus_output,
-        )  {
+        ) {
             bugloc::report_suspicious(&passed_cov, args.top_sus as usize);
-        }
-        else {
+        } else {
             has_failed = 1;
         }
     }
