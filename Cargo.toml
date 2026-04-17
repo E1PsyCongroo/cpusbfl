@@ -1,0 +1,29 @@
+[package]
+name = "sbfl"
+version = "0.1.0"
+edition = "2024"
+description = "Fuzzing General-Purpose Hardware Designs with Software Fuzzers"
+
+[features]
+default = ["std"]
+std = []
+
+[dependencies]
+libafl = { path = "./LibAFL/crates/libafl/", features = ["prelude"] }
+libafl_bolts = { path = "./LibAFL/crates/libafl_bolts/" }
+clap = { version = "4.5.20", features = ["derive"] }
+libc = "0.2"
+md5 = "0.7"
+rand = "0.8.5"
+serde = { version = "1.0.228", default-features = false }
+serde_json = { version = "1.0.149", default-features = false }
+
+[lib]
+name = "fuzzer"
+crate-type = ["staticlib"]
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+debug = true
