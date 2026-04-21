@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::HashMap, fmt::Debug};
+use std::{borrow::Cow, fmt::Debug};
 
 use libafl::{
     Error, HasMetadata, HasNamedMetadata,
@@ -14,34 +14,33 @@ use libafl_bolts::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    coverage::{cover_accumulate, cover_len},
-    observer::multi_coverage_observer::MultiCoverageObserver,
+    state_tracker::StateTracker,
+    observer::statetracker_observer::StateTrackerObserver,
 };
 
-pub const COVERAGEFEEDBACK_PREFIX: &str = "multicoveragefeedback_metadata_";
+pub const STATETRACKERFEEDBACK_PREFIX: &str = "statetrackerfeedback_metadata_";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MultiCoverageMetadata {
-    pub coverage: HashMap<String, Vec<u8>>,
+pub struct StateTrackerMetadata {
+    pub track: StateTracker,
     pub is_passed: bool,
-    pub is_initial: bool,
 }
 
-libafl_bolts::impl_serdeany!(MultiCoverageMetadata);
+libafl_bolts::impl_serdeany!(StateTrackerMetadata);
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct MultiCoverageFeedback<'a> {
+pub struct StateTrackerFeedback {
     name: Cow<'static, str>,
-    o_ref: Handle<MultiCoverageObserver<'a>>,
-    inner: NewHashFeedback<MultiCoverageObserver<'a>>,
-    pending: Option<MultiCoverageMetadata>,
+    o_ref: Handle<StateTrackerObserver>,
+    inner: NewHashFeedback<StateTrackerObserver>,
+    pending: Option<StateTrackerMetadata>,
 }
 
-impl<'a> MultiCoverageFeedback<'a> {
+impl StateTrackerFeedback {
     #[must_use]
-    pub fn new(observer: &MultiCoverageObserver<'a>) -> Self {
+    pub fn new(observer: &StateTrackerObserver) -> Self {
         Self {
-            name: Cow::from(COVERAGEFEEDBACK_PREFIX.to_string() + observer.name()),
+            name: Cow::from(STATETRACKERFEEDBACK_PREFIX.to_string() + observer.name()),
             o_ref: observer.handle(),
             inner: NewHashFeedback::new(observer),
             pending: None,
@@ -49,14 +48,14 @@ impl<'a> MultiCoverageFeedback<'a> {
     }
 }
 
-impl Named for MultiCoverageFeedback<'_> {
+impl Named for StateTrackerFeedback {
     #[inline]
     fn name(&self) -> &Cow<'static, str> {
         &self.name
     }
 }
 
-impl<S> StateInitializer<S> for MultiCoverageFeedback<'_>
+impl<S> StateInitializer<S> for StateTrackerFeedback
 where
     S: HasNamedMetadata,
 {
@@ -65,7 +64,7 @@ where
     }
 }
 
-impl<EM, I, OT, S> Feedback<EM, I, OT, S> for MultiCoverageFeedback<'_>
+impl<EM, I, OT, S> Feedback<EM, I, OT, S> for StateTrackerFeedback
 where
     OT: MatchName,
     S: HasNamedMetadata,
@@ -90,12 +89,11 @@ where
 
         let obs = observers
             .get(&self.o_ref)
-            .expect("A MultiCoverageFeedback needs a BacktraceObserver");
+            .expect("A StateTrackerFeedback needs a BacktraceObserver");
 
-        self.pending = Some(MultiCoverageMetadata {
-            coverage: obs.get_coverage_map(),
+        self.pending = Some(StateTrackerMetadata {
+            track: obs.get_state_tracker().to_owned(),
             is_passed: matches!(exit_kind, ExitKind::Ok),
-            is_initial: false,
         });
 
         Ok(true)
@@ -115,15 +113,6 @@ where
             .pending
             .take()
             .ok_or_else(|| Error::unknown("append_metadata called without pending metadata"))?;
-
-        for (cover_name, cover_points) in pending.coverage.iter() {
-            println!(
-                "[Debug] COVERAGE: {}, {}, {}",
-                cover_name,
-                cover_len(&cover_name),
-                cover_points.iter().map(|&x| x as u64).sum::<u64>(),
-            );
-        }
 
         testcase.add_metadata(pending);
         Ok(())

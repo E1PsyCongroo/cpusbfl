@@ -14,33 +14,33 @@ use libafl_bolts::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    coverage::Coverage,
-    observer::coverage_observer::CoverageObserver,
+    coverage::Coverages,
+    observer::coverages_observer::CoveragesObserver,
 };
 
-pub const COVERAGEFEEDBACK_PREFIX: &str = "coveragefeedback_metadata_";
+pub const COVERAGSEFEEDBACK_PREFIX: &str = "coveragesfeedback_metadata_";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CoverageMetadata {
-    pub cover: Coverage,
+pub struct CoveragesMetadata {
+    pub covers: Coverages,
     pub is_passed: bool,
 }
 
-libafl_bolts::impl_serdeany!(CoverageMetadata);
+libafl_bolts::impl_serdeany!(CoveragesMetadata);
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct CoverageFeedback {
+pub struct CoveragesFeedback {
     name: Cow<'static, str>,
-    o_ref: Handle<CoverageObserver>,
-    inner: NewHashFeedback<CoverageObserver>,
-    pending: Option<CoverageMetadata>,
+    o_ref: Handle<CoveragesObserver>,
+    inner: NewHashFeedback<CoveragesObserver>,
+    pending: Option<CoveragesMetadata>,
 }
 
-impl CoverageFeedback {
+impl CoveragesFeedback {
     #[must_use]
-    pub fn new(observer: &CoverageObserver) -> Self {
+    pub fn new(observer: &CoveragesObserver) -> Self {
         Self {
-            name: Cow::from(COVERAGEFEEDBACK_PREFIX.to_string() + observer.name()),
+            name: Cow::from(COVERAGSEFEEDBACK_PREFIX.to_string() + observer.name()),
             o_ref: observer.handle(),
             inner: NewHashFeedback::new(observer),
             pending: None,
@@ -48,14 +48,14 @@ impl CoverageFeedback {
     }
 }
 
-impl Named for CoverageFeedback {
+impl Named for CoveragesFeedback {
     #[inline]
     fn name(&self) -> &Cow<'static, str> {
         &self.name
     }
 }
 
-impl<S> StateInitializer<S> for CoverageFeedback
+impl<S> StateInitializer<S> for CoveragesFeedback
 where
     S: HasNamedMetadata,
 {
@@ -64,7 +64,7 @@ where
     }
 }
 
-impl<EM, I, OT, S> Feedback<EM, I, OT, S> for CoverageFeedback
+impl<EM, I, OT, S> Feedback<EM, I, OT, S> for CoveragesFeedback
 where
     OT: MatchName,
     S: HasNamedMetadata,
@@ -89,10 +89,10 @@ where
 
         let obs = observers
             .get(&self.o_ref)
-            .expect("A CoverageFeedback needs a BacktraceObserver");
+            .expect("A CoveragesFeedback needs a BacktraceObserver");
 
-        self.pending = Some(CoverageMetadata {
-            cover: obs.get_coverage().to_owned(),
+        self.pending = Some(CoveragesMetadata {
+            covers: obs.get_coverages().to_owned(),
             is_passed: matches!(exit_kind, ExitKind::Ok),
         });
 
@@ -113,6 +113,15 @@ where
             .pending
             .take()
             .ok_or_else(|| Error::unknown("append_metadata called without pending metadata"))?;
+
+        for (cover_name, cover) in pending.covers.iter() {
+            println!(
+                "[Debug] COVERAGE: {}, {}, {}",
+                cover_name,
+                cover.len(),
+                cover.iter().map(|&x| x as u64).sum::<u64>(),
+            );
+        }
 
         testcase.add_metadata(pending);
         Ok(())

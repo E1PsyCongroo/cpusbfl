@@ -1,2 +1,3 @@
 pub mod coverage_observer;
-pub mod multi_coverage_observer;
+pub mod coverages_observer;
+pub mod statetracker_observer;

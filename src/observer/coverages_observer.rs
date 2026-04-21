@@ -9,36 +9,36 @@ use libafl::{
 use libafl_bolts::{Named, prelude::OwnedPtr};
 use serde::{Deserialize, Serialize};
 
-use crate::coverage::Coverage;
+use crate::coverage::Coverages;
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct CoverageObserver {
+pub struct CoveragesObserver {
     name: Cow<'static, str>,
-    cover: OwnedPtr<Coverage>,
+    covers: OwnedPtr<Coverages>,
     hash: Option<u64>,
 }
 
-impl CoverageObserver {
-    pub unsafe fn from_raw(name: &'static str, cover: &Coverage) -> Self {
+impl CoveragesObserver {
+    pub unsafe fn from_raw(name: &'static str, covers: &Coverages) -> Self {
         Self {
             name: Cow::Borrowed(name),
-            cover: unsafe { OwnedPtr::from_raw(cover) },
+            covers: unsafe { OwnedPtr::from_raw(covers) },
             hash: None,
         }
     }
 
-    pub fn get_coverage(&self) -> &Coverage {
-        self.cover.as_ref()
+    pub fn get_coverages(&self) -> &Coverages {
+        self.covers.as_ref()
     }
 }
 
-impl Named for CoverageObserver {
+impl Named for CoveragesObserver {
     fn name(&self) -> &Cow<'static, str> {
         &self.name
     }
 }
 
-impl<I, S> Observer<I, S> for CoverageObserver {
+impl<I, S> Observer<I, S> for CoveragesObserver {
     fn post_exec(
         &mut self,
         _state: &mut S,
@@ -46,13 +46,13 @@ impl<I, S> Observer<I, S> for CoverageObserver {
         _exit_kind: &ExitKind,
     ) -> Result<(), Error> {
         let mut h = DefaultHasher::new();
-        self.get_coverage().hash(&mut h);
+        self.get_coverages().hash(&mut h);
         self.hash = Some(h.finish());
         Ok(())
     }
 }
 
-impl ObserverWithHashField for CoverageObserver {
+impl ObserverWithHashField for CoveragesObserver {
     fn hash(&self) -> Option<u64> {
         self.hash
     }

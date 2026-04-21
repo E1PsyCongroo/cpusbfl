@@ -1,57 +1,15 @@
-use core::slice;
-/**
- * Copyright (c) 2023 Institute of Computing Technology, Chinese Academy of Sciences
- * xfuzz is licensed under Mulan PSL v2.
- * You can use this software according to the terms and conditions of the Mulan PSL v2.
- * You may obtain a copy of Mulan PSL v2 at:
- *          http://license.coscl.org.cn/MulanPSL2
- * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND,
- * EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT,
- * MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
- * See the Mulan PSL v2 for more details.
- */
 use std::{collections::HashMap, fs, path::PathBuf, time::Duration};
 
 use libafl::{StdFuzzer, prelude::*, schedulers::QueueScheduler, state::StdState};
 use libafl_bolts::{current_nanos, rands::StdRand, tuples::tuple_list};
 
 use crate::coverage::*;
-use crate::feedback::multi_coverage_feedback::*;
+use crate::feedback::{coverages_feedback::*, statetracker_feedback::*};
 use crate::harness;
 use crate::monitor;
-use crate::observer::multi_coverage_observer::MultiCoverageObserver;
-
-fn jaccard_similarity(a: &[u8], b: &[u8]) -> f64 {
-    assert_eq!(a.len(), b.len());
-
-    let (intersection, union) = a
-        .iter()
-        .zip(b.iter())
-        .fold((0usize, 0usize), |(i, u), (a, b)| {
-            (i + (a & b) as usize, u + (a | b) as usize)
-        });
-
-    if union == 0 {
-        1.0
-    } else {
-        intersection as f64 / union as f64
-    }
-}
-
-fn distance_similarity(a: &[u8], b: &[u8]) -> f64 {
-    assert_eq!(a.len(), b.len());
-
-    let dist_sq: f64 = a
-        .iter()
-        .zip(b.iter())
-        .map(|(&x, &y)| {
-            let d = x as f64 - y as f64;
-            d * d
-        })
-        .sum();
-
-    1.0 / (1.0 + dist_sq.sqrt())
-}
+use crate::observer::{coverages_observer::*, statetracker_observer::*};
+use crate::similarity::{fastdtw_similarity, jaccard_similarity};
+use crate::state_tracker::*;
 
 fn load_initial_case(corpus_input: &String) -> BytesInput {
     let path = PathBuf::from(corpus_input);
@@ -79,8 +37,9 @@ fn load_initial_case(corpus_input: &String) -> BytesInput {
     BytesInput::new(bytes)
 }
 
-pub(crate) struct CaseCoverage {
-    pub coverage: HashMap<String, Vec<u8>>,
+pub(crate) struct CaseMetadata {
+    pub covers: Coverages,
+    pub state_track: StateTracker,
     pub is_passed: bool,
 }
 
@@ -91,31 +50,44 @@ fn emit_top_passed_testcases(
         StdRand,
         OnDiskCorpus<ValueInput<Vec<u8>>>,
     >,
-    init_cov: HashMap<String, Vec<u8>>,
+    init_metadata: CaseMetadata,
     top_n: u64,
     corpus_output: Option<String>,
-) -> Result<Vec<CaseCoverage>, Box<dyn std::error::Error>> {
+) -> Result<Vec<CaseMetadata>, Box<dyn std::error::Error>> {
     let corpus = state.corpus();
     let mut passed_cases = Vec::new();
 
     for id in corpus.ids() {
         let testcase = corpus.get(id)?.borrow();
-        let metadata = testcase.metadata::<MultiCoverageMetadata>()?;
 
-        if !metadata.is_passed {
+        let cover = testcase.metadata::<CoveragesMetadata>()?;
+        let track = testcase.metadata::<StateTrackerMetadata>()?;
+        assert_eq!(cover.is_passed, track.is_passed);
+
+        if !cover.is_passed || !track.is_passed {
             continue;
         }
 
-        let similarity = init_cov
-            .keys()
-            .map(|cov_name| {
-                jaccard_similarity(
-                    &init_cov.get(cov_name).unwrap(),
-                    &metadata.coverage.get(cov_name).unwrap(),
-                )
-            })
-            .sum::<f64>()
-            / init_cov.len() as f64;
+        let metadata = CaseMetadata {
+            covers: cover.covers.to_owned(),
+            state_track: track.track.to_owned(),
+            is_passed: cover.is_passed && track.is_passed,
+        };
+
+        let similarity = 0.5
+            * (init_metadata
+                .covers
+                .names()
+                .iter()
+                .map(|cov_name| {
+                    jaccard_similarity(
+                        &init_metadata.covers.get(cov_name).as_slice(),
+                        &metadata.covers.get(cov_name).as_slice(),
+                    )
+                })
+                .sum::<f64>()
+                / init_metadata.covers.len() as f64)
+            + 0.5 * fastdtw_similarity(&init_metadata.state_track, &metadata.state_track, 3)?;
 
         let input = testcase
             .input()
@@ -124,12 +96,7 @@ fn emit_top_passed_testcases(
                 "Corpus testcase {id} has no input"
             )))?;
 
-        passed_cases.push((
-            usize::from(id),
-            input.clone(),
-            metadata.coverage.clone(),
-            similarity,
-        ));
+        passed_cases.push((usize::from(id), input.clone(), metadata, similarity));
     }
 
     passed_cases.sort_by(|a, b| {
@@ -160,18 +127,11 @@ fn emit_top_passed_testcases(
         }
     }
 
-    let mut case_coverages: Vec<CaseCoverage> = top_passed_cases
+    let mut case_coverages: Vec<CaseMetadata> = top_passed_cases
         .into_iter()
-        .map(|(_, _, cov, _)| CaseCoverage {
-            coverage: cov,
-            is_passed: true,
-        })
+        .map(|(_, _, meta, _)| meta)
         .collect();
-    case_coverages.push(CaseCoverage {
-        coverage: init_cov,
-        is_passed: false,
-    });
-
+    case_coverages.push(init_metadata);
     Ok(case_coverages)
 }
 
@@ -181,24 +141,20 @@ pub(crate) fn run_fuzzer(
     top_n: u64,
     corpus_input: String,
     corpus_output: Option<String>,
-) -> Result<Vec<CaseCoverage>, Box<dyn std::error::Error>> {
+) -> Result<Vec<CaseMetadata>, Box<dyn std::error::Error>> {
     // Scheduler, Feedback, Objective
     let scheduler = QueueScheduler::new();
-    let observer = unsafe {
-        MultiCoverageObserver::from_mut_ptr(
-            "coverage",
-            cover_names()
-                .iter()
-                .map(|cover_name| {
-                    (
-                        cover_name.to_owned(),
-                        (cover_as_mut_ptr(cover_name), cover_len(cover_name)),
-                    )
-                })
-                .collect(),
-        )
-    };
-    let mut feedback = MultiCoverageFeedback::new(&observer);
+
+    let coverages_guard = coverages();
+    let coverages_observer = unsafe { CoveragesObserver::from_raw("coverages", &coverages_guard) };
+    let statetracker_guard = tracker("ArchIntRegState");
+    let statetracker_observer =
+        unsafe { StateTrackerObserver::from_raw("state_tracker", &statetracker_guard) };
+
+    let mut feedback = feedback_and!(
+        CoveragesFeedback::new(&coverages_observer),
+        StateTrackerFeedback::new(&statetracker_observer)
+    );
     let mut objective = ConstFeedback::new(false);
 
     // State, Manager
@@ -220,7 +176,7 @@ pub(crate) fn run_fuzzer(
     let mut binding = harness::fuzz_harness;
     let mut executor = InProcessExecutor::with_timeout(
         &mut binding,
-        tuple_list!(observer),
+        tuple_list!(coverages_observer, statetracker_observer),
         &mut fuzzer,
         &mut state,
         &mut mgr,
@@ -233,19 +189,31 @@ pub(crate) fn run_fuzzer(
     let mut stages = tuple_list!(StdMutationalStage::new(mutator));
 
     let init_bytes = load_initial_case(&corpus_input);
-    let init_cov;
+    let init_metadata;
     if let (ExecuteInputResult::Corpus, Some(init_corpus_id)) =
         fuzzer.evaluate_input(&mut state, &mut executor, &mut mgr, &init_bytes)?
     {
-        let mut init_testcase = state.corpus_mut().get(init_corpus_id)?.borrow_mut();
-        let init_metadata = init_testcase.metadata_mut::<MultiCoverageMetadata>()?;
-        init_metadata.is_initial = true;
-        if init_metadata.is_passed {
+        let init_testcase = state.corpus_mut().get(init_corpus_id)?.borrow_mut();
+
+        let init_cover = init_testcase.metadata::<CoveragesMetadata>()?;
+        if init_cover.is_passed {
             return Err(Box::new(Error::illegal_argument(format!(
                 "Initial case from {corpus_input:?} did not crash"
             ))));
         }
-        init_cov = init_metadata.coverage.clone();
+
+        let init_state = init_testcase.metadata::<StateTrackerMetadata>()?;
+        if init_cover.is_passed {
+            return Err(Box::new(Error::illegal_argument(format!(
+                "Initial case from {corpus_input:?} did not crash"
+            ))));
+        }
+
+        init_metadata = CaseMetadata {
+            covers: init_cover.covers.to_owned(),
+            state_track: init_state.track.to_owned(),
+            is_passed: false,
+        };
     } else {
         return Err(Box::new(Error::illegal_argument(format!(
             "Initial case from {corpus_input:?} was not accepted into the main corpus by feedback"
@@ -254,5 +222,5 @@ pub(crate) fn run_fuzzer(
 
     fuzzer.fuzz_loop_for(&mut stages, &mut executor, &mut state, &mut mgr, max_iters)?;
 
-    emit_top_passed_testcases(&state, init_cov, top_n, corpus_output)
+    emit_top_passed_testcases(&state, init_metadata, top_n, corpus_output)
 }

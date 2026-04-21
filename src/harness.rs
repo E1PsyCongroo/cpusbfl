@@ -1,44 +1,41 @@
 use std::sync::{Mutex, OnceLock};
-
-/**
- * Copyright (c) 2023 Institute of Computing Technology, Chinese Academy of Sciences
- * xfuzz is licensed under Mulan PSL v2.
- * You can use this software according to the terms and conditions of the Mulan PSL v2.
- * You may obtain a copy of Mulan PSL v2 at:
- *          http://license.coscl.org.cn/MulanPSL2
- * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND,
- * EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT,
- * MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
- * See the Mulan PSL v2 for more details.
- */
-extern crate libc;
-extern crate rand;
-
 use std::ffi::CString;
 use std::io::{self, Write};
 
 use crate::coverage::*;
+use crate::state_tracker::*;
 use crate::monitor::store_testcase;
 
 use libafl::prelude::*;
 use libc::*;
 
 unsafe extern "C" {
+    pub fn enable_sim_verbose();
+
+    pub fn disable_sim_verbose();
+
     pub fn sim_main(argc: c_int, argv: *const *const c_char) -> c_int;
 
+    // coverage
     pub fn get_cover_number() -> c_uint;
 
     pub fn get_cover_point_name(i: usize) -> *const c_char;
 
-    pub fn update_stats(bitmap: *mut c_uchar);
+    pub fn update_stats_cover(bitmap: *mut c_uchar);
 
     pub fn display_uncovered_points();
 
     pub fn set_cover_feedback(name: *const c_char);
 
-    pub fn enable_sim_verbose();
+    // state
+    pub fn get_state_number() -> usize;
 
-    pub fn disable_sim_verbose();
+    pub fn get_state_size() -> usize;
+
+    pub fn update_stats_state(state_tracker: *mut c_void);
+
+    pub fn set_state_feedback(name: *const c_char);
+
 }
 
 static SIM_ARGS: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
@@ -68,6 +65,7 @@ fn sim_run(workload: &String) -> i32 {
     let ret = unsafe { sim_main(sim_args.len() as i32, p_argv.as_ptr()) };
     all_cover_update_stats();
     all_cover_accumulate();
+    all_tracker_update_stats();
 
     ret
 }
@@ -103,7 +101,7 @@ pub(crate) fn fuzz_harness(input: &BytesInput) -> ExitKind {
 
     // get coverage
     for cover_name in cover_names() {
-        cover_display(cover_name);
+        cover_display(&cover_name);
     }
     io::stdout().flush().unwrap();
 
@@ -136,5 +134,6 @@ pub(crate) fn set_sim_env(cover_names: String, verbose: bool, emu_args: Vec<Stri
             .filter(|s| !s.is_empty())
             .collect(),
     );
-}
 
+    state_tracker_init("ArchIntRegState".to_string());
+}

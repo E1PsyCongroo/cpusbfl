@@ -1,117 +1,204 @@
-use core::panic;
-/**
- * Copyright (c) 2023 Institute of Computing Technology, Chinese Academy of Sciences
- * xfuzz is licensed under Mulan PSL v2.
- * You can use this software according to the terms and conditions of the Mulan PSL v2.
- * You may obtain a copy of Mulan PSL v2 at:
- *          http://license.coscl.org.cn/MulanPSL2
- * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND,
- * EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT,
- * MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
- * See the Mulan PSL v2 for more details.
- */
-use std::collections::HashMap;
-use std::ffi::{CStr, CString};
-use std::sync::{Mutex, OnceLock};
+use std::{
+    hash::{Hash, Hasher},
+    collections::HashMap,
+    ffi::{CStr, CString},
+    panic,
+    sync::{Mutex, OnceLock},
+};
+
+use serde::{Deserialize, Serialize};
 
 use crate::harness::*;
 
-struct Coverage {
+fn set_cover_feedback_by_name(cover_name: &str) {
+    unsafe { set_cover_feedback(CString::new(cover_name.as_bytes()).unwrap().as_ptr()) }
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub(crate) struct Coverage {
     cover_points: Vec<u8>,
-    accumulated: Vec<u8>,
 }
 
 impl Coverage {
     pub fn new(n_cover: usize) -> Self {
         Self {
             cover_points: vec![0; n_cover],
-            accumulated: vec![0; n_cover],
         }
     }
 
     pub fn len(&self) -> usize {
-        self.cover_points.capacity()
+        self.cover_points.len()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &u8> {
+        self.cover_points.iter()
+    }
+
+    pub fn into_iter(self) -> impl Iterator<Item = u8> {
+        self.cover_points.into_iter()
+    }
+
+    pub fn as_slice(&self) -> &[u8] {
+        self.cover_points.as_slice()
+    }
+
+    pub fn as_mut_slice(&mut self) -> &mut [u8] {
+        self.cover_points.as_mut_slice()
+    }
+
+    pub fn as_ptr(&self) -> *const u8 {
+        self.cover_points.as_ptr()
     }
 
     pub fn as_mut_ptr(&self) -> *mut u8 {
         self.cover_points.as_ptr().cast_mut()
     }
+}
 
-    pub fn accumulate(&mut self) {
-        for (i, covered) in self.cover_points.iter().enumerate() {
-            if *covered != 0 as u8 {
-                self.accumulated[i] = 1;
-            }
+impl Hash for Coverage {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.cover_points.hash(state);
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub(crate) struct Coverages {
+    covers: HashMap<String, Coverage>,
+}
+
+impl Coverages {
+    pub fn new(cover_names: &[String]) -> Self {
+        let mut covers = HashMap::new();
+
+        for cover_name in cover_names {
+            set_cover_feedback_by_name(cover_name);
+            let n_cover = unsafe { get_cover_number() as usize };
+            covers.insert(cover_name.clone(), Coverage::new(n_cover));
         }
+
+        Self { covers }
     }
 
-    pub fn get_accumulative_coverage(&self) -> f64 {
-        let mut covered_num: usize = 0;
-        for covered in self.accumulated.iter() {
-            if *covered != 0 as u8 {
-                covered_num += 1;
-            }
-        }
-        100.0 * covered_num as f64 / self.len() as f64
+    pub fn len(&self) -> usize {
+        self.covers.len()
     }
 
-    pub fn display(&self, name: Option<&str>) {
-        // println!("Total Covered Points: {:?}", self.accumulated);
-        match name {
-            Some(name) => println!(
-                "{} Accumulative Coverage:       {:.3}%",
-                name,
-                self.get_accumulative_coverage()
-            ),
-            None => println!(
-                "Total Coverage:       {:.3}%",
-                self.get_accumulative_coverage()
-            ),
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &Coverage)> {
+        self.covers.iter()
+    }
+
+    pub fn into_iter(self) -> impl Iterator<Item = (String, Coverage)> {
+        self.covers.into_iter()
+    }
+
+    pub fn get(&self, cover_name: &str) -> &Coverage {
+        self.covers
+            .get(cover_name)
+            .unwrap_or_else(|| panic!("coverage not found: {}", cover_name))
+    }
+
+    pub fn get_mut(&mut self, cover_name: &str) -> &mut Coverage {
+        self.covers
+            .get_mut(cover_name)
+            .unwrap_or_else(|| panic!("coverage not found: {}", cover_name))
+    }
+
+    pub fn names(&self) -> Vec<String> {
+        self.covers.keys().cloned().collect()
+    }
+}
+
+impl Hash for Coverages {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let mut entries: Vec<_> = self.covers.iter().collect();
+        entries.sort_by(|a, b| a.0.cmp(b.0));
+
+        for (name, coverage) in entries {
+            name.hash(state);
+            coverage.hash(state);
         }
     }
 }
 
-static COVERAGE_NAMES: OnceLock<Vec<String>> = OnceLock::new();
-static ICOVERAGE: OnceLock<HashMap<String, Mutex<Coverage>>> = OnceLock::new();
+struct AccumulatedCoverages {
+    covers: HashMap<String, Vec<u8>>,
+}
+
+impl AccumulatedCoverages {
+    fn new(cover_names: &[String]) -> Self {
+        let mut covers = HashMap::new();
+
+        for cover_name in cover_names {
+            set_cover_feedback_by_name(cover_name);
+            let n_cover = unsafe { get_cover_number() as usize };
+            covers.insert(cover_name.clone(), vec![0; n_cover]);
+        }
+
+        Self { covers }
+    }
+
+    fn get(&self, cover_name: &str) -> &Vec<u8> {
+        self.covers
+            .get(cover_name)
+            .unwrap_or_else(|| panic!("coverage not found: {}", cover_name))
+    }
+
+    fn get_mut(&mut self, cover_name: &str) -> &mut Vec<u8> {
+        self.covers
+            .get_mut(cover_name)
+            .unwrap_or_else(|| panic!("coverage not found: {}", cover_name))
+    }
+}
+
+static COVERAGES: OnceLock<Mutex<Coverages>> = OnceLock::new();
+static ACCUMULATED_COVERAGES: OnceLock<Mutex<AccumulatedCoverages>> = OnceLock::new();
 
 /// Call this once, right after your C test‑bench has told you how many
 /// counters are present.
 pub(crate) fn cover_init(cover_names: Vec<String>) {
-    let mut covers = HashMap::new();
-    for cover_name in &cover_names {
-        unsafe { set_cover_feedback(CString::new(cover_name.as_bytes()).unwrap().as_ptr()) }
-        covers.insert(
-            cover_name.clone(),
-            Mutex::new(Coverage::new(unsafe { get_cover_number() as usize })),
-        );
-    }
-    // `set` returns Err if it was already initialised; handle that however
-    // you prefer (here we just ignore the second call).
-    let _ = COVERAGE_NAMES.set(cover_names);
-    let _ = ICOVERAGE.set(covers);
+    let _ = COVERAGES.set(Mutex::new(Coverages::new(&cover_names)));
+    let _ = ACCUMULATED_COVERAGES.set(Mutex::new(AccumulatedCoverages::new(&cover_names)));
 }
 
-fn cov(cover_name: &str) -> std::sync::MutexGuard<'static, Coverage> {
-    ICOVERAGE
+pub(crate) fn coverages() -> std::sync::MutexGuard<'static, Coverages> {
+    COVERAGES
         .get()
         .expect("cover_init() not called")
-        .get(cover_name)
-        .unwrap_or_else(|| panic!("coverage not found: {}", cover_name))
         .lock()
         .expect("poisoned mutex")
 }
 
-pub(crate) fn cover_names() -> &'static Vec<String> {
-    COVERAGE_NAMES.get().expect("cover_init() not called")
+fn accumulated_coverages() -> std::sync::MutexGuard<'static, AccumulatedCoverages> {
+    ACCUMULATED_COVERAGES
+        .get()
+        .expect("cover_init() not called")
+        .lock()
+        .expect("poisoned mutex")
+}
+
+fn get_accumulative_coverage(cover_name: &str) -> f64 {
+    let guard = accumulated_coverages();
+    let accumulated_cov = guard.get(cover_name);
+    let mut covered_num: usize = 0;
+    for covered in accumulated_cov.iter() {
+        if *covered != 0 as u8 {
+            covered_num += 1;
+        }
+    }
+    100.0 * covered_num as f64 / accumulated_cov.len() as f64
+}
+
+pub(crate) fn cover_names() -> Vec<String> {
+    coverages().names()
 }
 
 pub(crate) fn cover_len(cover_name: &str) -> usize {
-    cov(cover_name).len()
+    coverages().get(cover_name).len()
 }
 
 pub(crate) fn cover_point_name(cover_name: &str, i: usize) -> String {
     let cover_point_name = unsafe {
-        set_cover_feedback(CString::new(cover_name.as_bytes()).unwrap().as_ptr());
+        set_cover_feedback_by_name(cover_name);
         get_cover_point_name(i)
     };
     if cover_point_name.is_null() {
@@ -125,39 +212,50 @@ pub(crate) fn cover_point_name(cover_name: &str, i: usize) -> String {
 }
 
 pub(crate) fn cover_as_mut_ptr(cover_name: &str) -> *mut u8 {
-    let guard = cov(cover_name);
-    guard.as_mut_ptr().cast::<u8>()
+    coverages().get_mut(cover_name).as_mut_ptr().cast::<u8>()
 }
 
 pub(crate) fn cover_update_stats(cover_name: &str) {
     unsafe {
-        set_cover_feedback(CString::new(cover_name.as_bytes()).unwrap().as_ptr());
-        update_stats(cover_as_mut_ptr(cover_name));
+        set_cover_feedback_by_name(cover_name);
+        update_stats_cover(cover_as_mut_ptr(cover_name));
     }
 }
 
 pub(crate) fn cover_accumulate(cover_name: &str) {
-    cov(cover_name).accumulate()
+    let cov_guard = coverages();
+    let cov = cov_guard.get(cover_name);
+    let mut accumulated_cov_guard = accumulated_coverages();
+    let accumulated_cov = accumulated_cov_guard.get_mut(cover_name);
+    for (i, covered) in cov.cover_points.iter().enumerate() {
+        if *covered != 0 as u8 {
+            accumulated_cov[i] = 1;
+        }
+    }
 }
 
 pub(crate) fn cover_display(cover_name: &str) {
-    cov(cover_name).display(Some(cover_name))
+    println!(
+        "{} Accumulative Coverage:       {:.3}%",
+        cover_name,
+        get_accumulative_coverage(cover_name)
+    )
 }
 
 pub(crate) fn all_cover_update_stats() {
     for cover_name in cover_names() {
-        cover_update_stats(cover_name);
+        cover_update_stats(&cover_name);
     }
 }
 
 pub(crate) fn all_cover_accumulate() {
     for cover_name in cover_names() {
-        cover_accumulate(cover_name);
+        cover_accumulate(&cover_name);
     }
 }
 
 pub(crate) fn all_cover_display() {
     for cover_name in cover_names() {
-        cover_display(cover_name);
+        cover_display(&cover_name);
     }
 }
