@@ -13,10 +13,7 @@ use libafl_bolts::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    state_tracker::StateTracker,
-    observer::statetracker_observer::StateTrackerObserver,
-};
+use crate::{observer::statetracker_observer::StateTrackerObserver, state_tracker::StateTracker};
 
 pub const STATETRACKERFEEDBACK_PREFIX: &str = "statetrackerfeedback_metadata_";
 
@@ -79,20 +76,21 @@ where
     ) -> Result<bool, Error> {
         self.pending = None;
 
+        let track = observers
+            .get(&self.o_ref)
+            .expect("A StateTrackerFeedback needs a BacktraceObserver").get_state_tracker();
+
         let interesting = self
             .inner
-            .is_interesting(state, manager, input, observers, exit_kind)?;
+            .is_interesting(state, manager, input, observers, exit_kind)?
+            && track.len() > 0;
 
         if !interesting {
             return Ok(false);
         }
 
-        let obs = observers
-            .get(&self.o_ref)
-            .expect("A StateTrackerFeedback needs a BacktraceObserver");
-
         self.pending = Some(StateTrackerMetadata {
-            track: obs.get_state_tracker().to_owned(),
+            track: track.to_owned(),
             is_passed: matches!(exit_kind, ExitKind::Ok),
         });
 
@@ -108,6 +106,13 @@ where
     ) -> Result<(), Error> {
         self.inner
             .append_metadata(state, manager, observers, testcase)?;
+
+        // println!("[Debug] Appending state tracker metadata:");
+        // println!(
+        //     "[Debug] State tracker has {} states of size {}",
+        //     self.pending.as_ref().unwrap().track.len(),
+        //     self.pending.as_ref().unwrap().track.state_size()
+        // );
 
         let pending = self
             .pending

@@ -114,14 +114,15 @@ where
             .take()
             .ok_or_else(|| Error::unknown("append_metadata called without pending metadata"))?;
 
-        for (cover_name, cover) in pending.covers.iter() {
-            println!(
-                "[Debug] COVERAGE: {}, {}, {}",
-                cover_name,
-                cover.len(),
-                cover.iter().map(|&x| x as u64).sum::<u64>(),
-            );
-        }
+        // println!("[Debug] Appending coverage metadata:");
+        // for (cover_name, cover) in pending.covers.iter() {
+        //     println!(
+        //         "[Debug] COVERAGE: {}, {}, {}",
+        //         cover_name,
+        //         cover.len(),
+        //         cover.iter().map(|&x| x as u64).sum::<u64>(),
+        //     );
+        // }
 
         testcase.add_metadata(pending);
         Ok(())

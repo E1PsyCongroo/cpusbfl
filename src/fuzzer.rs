@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fs, path::PathBuf, time::Duration};
+use std::{fs, path::PathBuf, time::Duration};
 
 use libafl::{StdFuzzer, prelude::*, schedulers::QueueScheduler, state::StdState};
 use libafl_bolts::{current_nanos, rands::StdRand, tuples::tuple_list};
@@ -8,7 +8,7 @@ use crate::feedback::{coverages_feedback::*, statetracker_feedback::*};
 use crate::harness;
 use crate::monitor;
 use crate::observer::{coverages_observer::*, statetracker_observer::*};
-use crate::similarity::{fastdtw_similarity, jaccard_similarity};
+use crate::similarity::*;
 use crate::state_tracker::*;
 
 fn load_initial_case(corpus_input: &String) -> BytesInput {
@@ -74,20 +74,24 @@ fn emit_top_passed_testcases(
             is_passed: cover.is_passed && track.is_passed,
         };
 
-        let similarity = 0.5
-            * (init_metadata
-                .covers
-                .names()
-                .iter()
-                .map(|cov_name| {
-                    jaccard_similarity(
-                        &init_metadata.covers.get(cov_name).as_slice(),
-                        &metadata.covers.get(cov_name).as_slice(),
-                    )
-                })
-                .sum::<f64>()
-                / init_metadata.covers.len() as f64)
-            + 0.5 * fastdtw_similarity(&init_metadata.state_track, &metadata.state_track, 3)?;
+        let distance = init_metadata
+            .covers
+            .names()
+            .iter()
+            .map(|cov_name| {
+                metadata.covers.get(cov_name).iter().for_each(|p| {assert!(*p <= 1);});
+                let dis = euclidean_distance(
+                    &init_metadata.covers.get(cov_name).as_slice(),
+                    &metadata.covers.get(cov_name).as_slice(),
+                ) / (init_metadata.covers.get(cov_name).len() as f64).sqrt();
+                assert!(dis <= 1.0, "Distance {dis} for cover {cov_name} between corpus_id {id} and initial case is greater than 1.0, which may indicate an issue in distance calculation or unexpected coverage difference.");
+                dis
+            })
+            .sum::<f64>() / init_metadata.covers.names().len() as f64
+            + fastdtw_distance(&init_metadata.state_track, &metadata.state_track, 10)?
+                / init_metadata.state_track.state_size() as f64;
+
+        let similarity = distance_similarity(distance);
 
         let input = testcase
             .input()
@@ -145,11 +149,9 @@ pub(crate) fn run_fuzzer(
     // Scheduler, Feedback, Objective
     let scheduler = QueueScheduler::new();
 
-    let coverages_guard = coverages();
-    let coverages_observer = unsafe { CoveragesObserver::from_raw("coverages", &coverages_guard) };
-    let statetracker_guard = tracker("ArchIntRegState");
+    let coverages_observer = unsafe { CoveragesObserver::from_raw("coverages", &coverages()) };
     let statetracker_observer =
-        unsafe { StateTrackerObserver::from_raw("state_tracker", &statetracker_guard) };
+        unsafe { StateTrackerObserver::from_raw("state_tracker", &tracker("ArchIntRegState")) };
 
     let mut feedback = feedback_and!(
         CoveragesFeedback::new(&coverages_observer),
@@ -221,6 +223,15 @@ pub(crate) fn run_fuzzer(
     }
 
     fuzzer.fuzz_loop_for(&mut stages, &mut executor, &mut state, &mut mgr, max_iters)?;
+
+    for cover_name in cover_names() {
+        println!("init_case cover points of {cover_name}:");
+        for (point, cover) in init_metadata.covers.get(&cover_name).iter().enumerate() {
+            if *cover != 0 {
+                println!("cover point: {}", cover_point_name(&cover_name, point));
+            }
+        }
+    }
 
     emit_top_passed_testcases(&state, init_metadata, top_n, corpus_output)
 }
