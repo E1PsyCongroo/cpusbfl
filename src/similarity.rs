@@ -1,19 +1,21 @@
-use dtw_rs::{Solution, fastdtw};
+use dtw_rs::{fastdtw, Solution};
 use ndarray::ArrayView1;
 
 use crate::state_tracker::StateTracker;
+use crate::coverage::CoveragePoint;
 
-pub(crate) fn euclidean_distance(a: &[u8], b: &[u8]) -> f64 {
+pub(crate) fn euclidean_distance<T>(a: &[T], b: &[T]) -> f64
+where
+    T: CoveragePoint,
+{
     assert_eq!(a.len(), b.len());
-
-    let a = ArrayView1::from(a);
-    let b = ArrayView1::from(b);
 
     let dist_sq: f64 = a
         .iter()
         .zip(b.iter())
         .map(|(&x, &y)| {
-            (x - y).pow(2) as f64
+            let dx = x.as_u64() as f64 - y.as_u64() as f64;
+            dx * dx
         })
         .sum();
 
@@ -42,6 +44,7 @@ pub(crate) fn distance_similarity(distance: f64) -> f64 {
     1.0 / (1.0 + distance)
 }
 
+#[allow(dead_code)]
 pub(crate) fn jaccard_similarity(a: &[u8], b: &[u8]) -> f64 {
     assert_eq!(a.len(), b.len());
 

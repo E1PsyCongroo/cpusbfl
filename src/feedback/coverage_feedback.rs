@@ -14,31 +14,42 @@ use libafl_bolts::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    coverage::Coverage,
+    coverage::{Coverage, CoveragePoint},
     observer::coverage_observer::CoverageObserver,
 };
 
 pub const COVERAGEFEEDBACK_PREFIX: &str = "coveragefeedback_metadata_";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CoverageMetadata {
-    pub cover: Coverage,
+#[serde(bound(serialize = "T: CoveragePoint", deserialize = "T: CoveragePoint"))]
+pub struct CoverageMetadata<T>
+where
+    T: CoveragePoint,
+{
+    pub cover: Coverage<T>,
     pub is_passed: bool,
 }
 
-libafl_bolts::impl_serdeany!(CoverageMetadata);
+libafl_bolts::impl_serdeany!(CoverageMetadata<T: CoveragePoint>);
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct CoverageFeedback {
+#[serde(bound(serialize = "T: CoveragePoint", deserialize = "T: CoveragePoint"))]
+pub struct CoverageFeedback<T>
+where
+    T: CoveragePoint,
+{
     name: Cow<'static, str>,
-    o_ref: Handle<CoverageObserver>,
-    inner: NewHashFeedback<CoverageObserver>,
-    pending: Option<CoverageMetadata>,
+    o_ref: Handle<CoverageObserver<T>>,
+    inner: NewHashFeedback<CoverageObserver<T>>,
+    pending: Option<CoverageMetadata<T>>,
 }
 
-impl CoverageFeedback {
+impl<T> CoverageFeedback<T>
+where
+    T: CoveragePoint,
+{
     #[must_use]
-    pub fn new(observer: &CoverageObserver) -> Self {
+    pub fn new(observer: &CoverageObserver<T>) -> Self {
         Self {
             name: Cow::from(COVERAGEFEEDBACK_PREFIX.to_string() + observer.name()),
             o_ref: observer.handle(),
@@ -48,26 +59,31 @@ impl CoverageFeedback {
     }
 }
 
-impl Named for CoverageFeedback {
+impl<T> Named for CoverageFeedback<T>
+where
+    T: CoveragePoint,
+{
     #[inline]
     fn name(&self) -> &Cow<'static, str> {
         &self.name
     }
 }
 
-impl<S> StateInitializer<S> for CoverageFeedback
+impl<T, S> StateInitializer<S> for CoverageFeedback<T>
 where
     S: HasNamedMetadata,
+    T: CoveragePoint,
 {
     fn init_state(&mut self, state: &mut S) -> Result<(), Error> {
         self.inner.init_state(state)
     }
 }
 
-impl<EM, I, OT, S> Feedback<EM, I, OT, S> for CoverageFeedback
+impl<T, EM, I, OT, S> Feedback<EM, I, OT, S> for CoverageFeedback<T>
 where
     OT: MatchName,
     S: HasNamedMetadata,
+    T: CoveragePoint,
 {
     fn is_interesting(
         &mut self,

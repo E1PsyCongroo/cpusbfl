@@ -1,6 +1,6 @@
 use crate::{coverage::*, fuzzer::CaseMetadata};
 
-fn cal_suspicious(cover_name: &str, case_meta: &[CaseMetadata]) -> Vec<f64> {
+fn cal_suspicious(cover_name: &String, case_meta: &[CaseMetadata]) -> Vec<f64> {
     let len = cover_len(cover_name);
     assert!(
         case_meta
@@ -14,15 +14,21 @@ fn cal_suspicious(cover_name: &str, case_meta: &[CaseMetadata]) -> Vec<f64> {
     let mut n_f = vec![0usize; len];
 
     for case in case_meta {
-        for (i, &covered) in case.covers.get(cover_name).iter().enumerate() {
+        for (i, covered) in case
+            .covers
+            .get(cover_name)
+            .covered_bits()
+            .into_iter()
+            .enumerate()
+        {
             if case.is_passed {
-                if covered != 0 {
+                if covered {
                     e_p[i] += 1;
                 } else {
                     n_p[i] += 1;
                 }
             } else {
-                if covered != 0 {
+                if covered {
                     e_f[i] += 1;
                 } else {
                     n_f[i] += 1;

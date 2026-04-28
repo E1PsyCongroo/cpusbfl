@@ -2,16 +2,15 @@ use std::ffi::CString;
 use std::hash::{Hash, Hasher};
 use std::sync::{Mutex, OnceLock};
 
-use serde::{Deserialize, Serialize};
 use dtw_rs::{Distance, Midpoint};
+use serde::{Deserialize, Serialize};
 
-use crate::similarity::*;
 use crate::harness::*;
+use crate::similarity::*;
 
 fn set_state_feedback_by_name(state_name: &str) {
     unsafe { set_state_feedback(CString::new(state_name.as_bytes()).unwrap().as_ptr()) }
 }
-
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub(crate) struct State {
@@ -56,7 +55,13 @@ impl Distance for State {
             return 0.0;
         }
 
-        euclidean_distance(self.as_slice(), other.as_slice())
+        (self
+            .as_slice()
+            .iter()
+            .zip(other.as_slice().iter())
+            .map(|(x, y)| (x ^ y).count_ones() as u64)
+            .sum::<u64>() as f64)
+            .sqrt()
     }
 }
 

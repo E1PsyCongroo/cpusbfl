@@ -9,17 +9,24 @@ use libafl::{
 use libafl_bolts::{Named, prelude::OwnedPtr};
 use serde::{Deserialize, Serialize};
 
-use crate::coverage::Coverage;
+use crate::coverage::{Coverage, CoveragePoint};
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct CoverageObserver {
+#[serde(bound(serialize = "T: CoveragePoint", deserialize = "T: CoveragePoint"))]
+pub struct CoverageObserver<T>
+where
+    T: CoveragePoint,
+{
     name: Cow<'static, str>,
-    cover: OwnedPtr<Coverage>,
+    cover: OwnedPtr<Coverage<T>>,
     hash: Option<u64>,
 }
 
-impl CoverageObserver {
-    pub unsafe fn from_raw(name: &'static str, cover: &Coverage) -> Self {
+impl<T> CoverageObserver<T>
+where
+    T: CoveragePoint,
+{
+    pub unsafe fn from_raw(name: &'static str, cover: &Coverage<T>) -> Self {
         Self {
             name: Cow::Borrowed(name),
             cover: unsafe { OwnedPtr::from_raw(cover) },
@@ -27,18 +34,24 @@ impl CoverageObserver {
         }
     }
 
-    pub fn get_coverage(&self) -> &Coverage {
+    pub fn get_coverage(&self) -> &Coverage<T> {
         self.cover.as_ref()
     }
 }
 
-impl Named for CoverageObserver {
+impl<T> Named for CoverageObserver<T>
+where
+    T: CoveragePoint,
+{
     fn name(&self) -> &Cow<'static, str> {
         &self.name
     }
 }
 
-impl<I, S> Observer<I, S> for CoverageObserver {
+impl<T, I, S> Observer<I, S> for CoverageObserver<T>
+where
+    T: CoveragePoint,
+{
     fn post_exec(
         &mut self,
         _state: &mut S,
@@ -52,7 +65,10 @@ impl<I, S> Observer<I, S> for CoverageObserver {
     }
 }
 
-impl ObserverWithHashField for CoverageObserver {
+impl<T> ObserverWithHashField for CoverageObserver<T>
+where
+    T: CoveragePoint,
+{
     fn hash(&self) -> Option<u64> {
         self.hash
     }

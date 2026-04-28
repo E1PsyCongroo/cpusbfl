@@ -1,7 +1,8 @@
 use std::{
-    hash::{Hash, Hasher},
     collections::HashMap,
-    ffi::{CStr, CString},
+    ffi::{CStr, CString, c_void},
+    fmt::Debug,
+    hash::{Hash, Hasher},
     panic,
     sync::{Mutex, OnceLock},
 };
@@ -14,56 +15,166 @@ fn set_cover_feedback_by_name(cover_name: &str) {
     unsafe { set_cover_feedback(CString::new(cover_name.as_bytes()).unwrap().as_ptr()) }
 }
 
-#[derive(Clone, Serialize, Deserialize, Debug)]
-pub(crate) struct Coverage {
-    cover_points: Vec<u8>,
+pub(crate) trait CoveragePoint:
+    Copy + Clone + Default + Debug + Hash + PartialEq + Serialize + for<'de> Deserialize<'de> + 'static
+{
+    fn is_covered(self) -> bool {
+        self != Self::default()
+    }
+
+    fn update_stats(ptr: *mut Self) {
+        unsafe {
+            update_stats_cover(ptr as *mut c_void);
+        }
+    }
+
+    fn as_u64(self) -> u64;
 }
 
-impl Coverage {
+impl CoveragePoint for bool {
+    fn as_u64(self) -> u64 {
+        self as u64
+    }
+}
+
+impl CoveragePoint for u8 {
+    fn as_u64(self) -> u64 {
+        self as u64
+    }
+}
+
+impl CoveragePoint for u64 {
+    fn as_u64(self) -> u64 {
+        self
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(bound(serialize = "T: CoveragePoint", deserialize = "T: CoveragePoint"))]
+pub(crate) struct Coverage<T = u64>
+where
+    T: CoveragePoint,
+{
+    point_counts: Vec<T>,
+}
+
+impl<T> Coverage<T>
+where
+    T: CoveragePoint,
+{
     pub fn new(n_cover: usize) -> Self {
         Self {
-            cover_points: vec![0; n_cover],
+            point_counts: vec![T::default(); n_cover],
         }
     }
 
     pub fn len(&self) -> usize {
-        self.cover_points.len()
+        self.point_counts.len()
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &u8> {
-        self.cover_points.iter()
+    pub fn as_slice(&self) -> &[T] {
+        self.point_counts.as_slice()
     }
 
-    pub fn into_iter(self) -> impl Iterator<Item = u8> {
-        self.cover_points.into_iter()
+    pub fn as_mut_slice(&mut self) -> &mut [T] {
+        self.point_counts.as_mut_slice()
     }
 
-    pub fn as_slice(&self) -> &[u8] {
-        self.cover_points.as_slice()
+    pub fn as_ptr(&self) -> *const T {
+        self.point_counts.as_ptr()
     }
 
-    pub fn as_mut_slice(&mut self) -> &mut [u8] {
-        self.cover_points.as_mut_slice()
+    pub fn as_mut_ptr(&mut self) -> *mut T {
+        self.point_counts.as_mut_ptr()
     }
 
-    pub fn as_ptr(&self) -> *const u8 {
-        self.cover_points.as_ptr()
+    pub fn covered_bits(&self) -> Vec<bool> {
+        self.point_counts.iter().map(|&p| p.is_covered()).collect()
     }
 
-    pub fn as_mut_ptr(&self) -> *mut u8 {
-        self.cover_points.as_ptr().cast_mut()
+    pub fn covered_counts(&self) -> Vec<u64> {
+        self.point_counts.iter().map(|&p| p.as_u64()).collect()
     }
 }
 
-impl Hash for Coverage {
+impl<T> Hash for Coverage<T>
+where
+    T: CoveragePoint,
+{
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.cover_points.hash(state);
+        self.point_counts.hash(state);
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub(crate) enum CoverageKind {
+    Bool,
+    U8,
+    U64,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub(crate) enum AnyCoverage {
+    Bool(Coverage<bool>),
+    U8(Coverage<u8>),
+    U64(Coverage<u64>),
+}
+
+impl AnyCoverage {
+    pub fn new(kind: CoverageKind, n_cover: usize) -> Self {
+        match kind {
+            CoverageKind::Bool => Self::Bool(Coverage::<bool>::new(n_cover)),
+            CoverageKind::U8 => Self::U8(Coverage::<u8>::new(n_cover)),
+            CoverageKind::U64 => Self::U64(Coverage::<u64>::new(n_cover)),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Bool(c) => c.len(),
+            Self::U8(c) => c.len(),
+            Self::U64(c) => c.len(),
+        }
+    }
+
+    pub fn update_stats(&mut self) {
+        match self {
+            Self::Bool(c) => bool::update_stats(c.as_mut_ptr()),
+            Self::U8(c) => u8::update_stats(c.as_mut_ptr()),
+            Self::U64(c) => u64::update_stats(c.as_mut_ptr()),
+        }
+    }
+
+    pub fn covered_bits(&self) -> Vec<bool> {
+        match self {
+            Self::Bool(c) => c.covered_bits(),
+            Self::U8(c) => c.covered_bits(),
+            Self::U64(c) => c.covered_bits(),
+        }
+    }
+
+    pub fn covered_counts(&self) -> Vec<u64> {
+        match self {
+            Self::Bool(c) => c.covered_counts(),
+            Self::U8(c) => c.covered_counts(),
+            Self::U64(c) => c.covered_counts(),
+        }
+    }
+}
+
+impl Hash for AnyCoverage {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            Self::Bool(c) => c.hash(state),
+            Self::U8(c) => c.hash(state),
+            Self::U64(c) => c.hash(state),
+        }
     }
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub(crate) struct Coverages {
-    covers: HashMap<String, Coverage>,
+    covers: HashMap<String, AnyCoverage>,
 }
 
 impl Coverages {
@@ -72,8 +183,19 @@ impl Coverages {
 
         for cover_name in cover_names {
             set_cover_feedback_by_name(cover_name);
+            let data_size = unsafe { get_cover_data_size() };
             let n_cover = unsafe { get_cover_number() as usize };
-            covers.insert(cover_name.clone(), Coverage::new(n_cover));
+            covers.insert(
+                cover_name.clone(),
+                AnyCoverage::new(
+                    if data_size == 8 {
+                        CoverageKind::U64
+                    } else {
+                        CoverageKind::U8
+                    },
+                    n_cover,
+                ),
+            );
         }
 
         Self { covers }
@@ -83,21 +205,21 @@ impl Coverages {
         self.covers.len()
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&String, &Coverage)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &AnyCoverage)> {
         self.covers.iter()
     }
 
-    pub fn into_iter(self) -> impl Iterator<Item = (String, Coverage)> {
+    pub fn into_iter(self) -> impl Iterator<Item = (String, AnyCoverage)> {
         self.covers.into_iter()
     }
 
-    pub fn get(&self, cover_name: &str) -> &Coverage {
+    pub fn get(&self, cover_name: &str) -> &AnyCoverage {
         self.covers
             .get(cover_name)
             .unwrap_or_else(|| panic!("coverage not found: {}", cover_name))
     }
 
-    pub fn get_mut(&mut self, cover_name: &str) -> &mut Coverage {
+    pub fn get_mut(&mut self, cover_name: &str) -> &mut AnyCoverage {
         self.covers
             .get_mut(cover_name)
             .unwrap_or_else(|| panic!("coverage not found: {}", cover_name))
@@ -105,6 +227,11 @@ impl Coverages {
 
     pub fn names(&self) -> Vec<String> {
         self.covers.keys().cloned().collect()
+    }
+
+    pub fn update_stats(&mut self, cover_name: &str) {
+        set_cover_feedback_by_name(cover_name);
+        self.get_mut(cover_name).update_stats();
     }
 }
 
@@ -121,7 +248,7 @@ impl Hash for Coverages {
 }
 
 struct AccumulatedCoverages {
-    covers: HashMap<String, Vec<u8>>,
+    covers: HashMap<String, Vec<bool>>,
 }
 
 impl AccumulatedCoverages {
@@ -129,21 +256,21 @@ impl AccumulatedCoverages {
         let mut covers = HashMap::new();
 
         for cover_name in cover_names {
-            set_cover_feedback_by_name(cover_name);
+            set_cover_feedback_by_name(&cover_name);
             let n_cover = unsafe { get_cover_number() as usize };
-            covers.insert(cover_name.clone(), vec![0; n_cover]);
+            covers.insert(cover_name.clone(), vec![false; n_cover]);
         }
 
         Self { covers }
     }
 
-    fn get(&self, cover_name: &str) -> &Vec<u8> {
+    fn get(&self, cover_name: &str) -> &Vec<bool> {
         self.covers
             .get(cover_name)
             .unwrap_or_else(|| panic!("coverage not found: {}", cover_name))
     }
 
-    fn get_mut(&mut self, cover_name: &str) -> &mut Vec<u8> {
+    fn get_mut(&mut self, cover_name: &str) -> &mut Vec<bool> {
         self.covers
             .get_mut(cover_name)
             .unwrap_or_else(|| panic!("coverage not found: {}", cover_name))
@@ -181,7 +308,7 @@ fn get_accumulative_coverage(cover_name: &str) -> f64 {
     let accumulated_cov = guard.get(cover_name);
     let mut covered_num: usize = 0;
     for covered in accumulated_cov.iter() {
-        if *covered != 0 as u8 {
+        if covered.is_covered() {
             covered_num += 1;
         }
     }
@@ -211,15 +338,8 @@ pub(crate) fn cover_point_name(cover_name: &str, i: usize) -> String {
     }
 }
 
-pub(crate) fn cover_as_mut_ptr(cover_name: &str) -> *mut u8 {
-    coverages().get_mut(cover_name).as_mut_ptr().cast::<u8>()
-}
-
 pub(crate) fn cover_update_stats(cover_name: &str) {
-    unsafe {
-        set_cover_feedback_by_name(cover_name);
-        update_stats_cover(cover_as_mut_ptr(cover_name));
-    }
+    coverages().update_stats(cover_name);
 }
 
 pub(crate) fn cover_accumulate(cover_name: &str) {
@@ -227,9 +347,9 @@ pub(crate) fn cover_accumulate(cover_name: &str) {
     let cov = cov_guard.get(cover_name);
     let mut accumulated_cov_guard = accumulated_coverages();
     let accumulated_cov = accumulated_cov_guard.get_mut(cover_name);
-    for (i, covered) in cov.cover_points.iter().enumerate() {
-        if *covered != 0 as u8 {
-            accumulated_cov[i] = 1;
+    for (i, covered) in cov.covered_bits().into_iter().enumerate() {
+        if covered {
+            accumulated_cov[i] = true
         }
     }
 }
@@ -258,4 +378,5 @@ pub(crate) fn all_cover_display() {
     for cover_name in cover_names() {
         cover_display(&cover_name);
     }
+    unsafe { display_uncovered_points() };
 }

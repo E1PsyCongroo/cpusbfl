@@ -1,13 +1,12 @@
-use std::sync::{Mutex, OnceLock};
-use std::ffi::CString;
+use std::ffi::{CString, c_char, c_int, c_uint, c_void};
 use std::io::{self, Write};
+use std::sync::{Mutex, OnceLock};
 
 use crate::coverage::*;
-use crate::state_tracker::*;
 use crate::monitor::store_testcase;
+use crate::state_tracker::*;
 
 use libafl::prelude::*;
-use libc::*;
 
 unsafe extern "C" {
     pub fn enable_sim_verbose();
@@ -21,7 +20,9 @@ unsafe extern "C" {
 
     pub fn get_cover_point_name(i: usize) -> *const c_char;
 
-    pub fn update_stats_cover(bitmap: *mut c_uchar);
+    pub fn get_cover_data_size() -> usize;
+
+    pub fn update_stats_cover(data: *mut c_void);
 
     pub fn display_uncovered_points();
 
@@ -130,8 +131,8 @@ pub(crate) fn set_sim_env(cover_names: String, verbose: bool, emu_args: Vec<Stri
     cover_init(
         cover_names
             .split(',')
-            .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
+            .map(|s| s.trim().to_string())
             .collect(),
     );
 

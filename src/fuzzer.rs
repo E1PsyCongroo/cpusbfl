@@ -1,5 +1,6 @@
 use std::{fs, path::PathBuf, time::Duration};
 
+use dtw_rs::Distance;
 use libafl::{StdFuzzer, prelude::*, schedulers::QueueScheduler, state::StdState};
 use libafl_bolts::{current_nanos, rands::StdRand, tuples::tuple_list};
 
@@ -74,22 +75,24 @@ fn emit_top_passed_testcases(
             is_passed: cover.is_passed && track.is_passed,
         };
 
-        let distance = init_metadata
+        let cover_distance = init_metadata
             .covers
             .names()
             .iter()
             .map(|cov_name| {
-                metadata.covers.get(cov_name).iter().for_each(|p| {assert!(*p <= 1);});
-                let dis = euclidean_distance(
-                    &init_metadata.covers.get(cov_name).as_slice(),
-                    &metadata.covers.get(cov_name).as_slice(),
-                ) / (init_metadata.covers.get(cov_name).len() as f64).sqrt();
-                assert!(dis <= 1.0, "Distance {dis} for cover {cov_name} between corpus_id {id} and initial case is greater than 1.0, which may indicate an issue in distance calculation or unexpected coverage difference.");
+                let init_counts = init_metadata.covers.get(cov_name).covered_counts();
+                let metadata_counts = metadata.covers.get(cov_name).covered_counts();
+                let dis = euclidean_distance(&init_counts, &metadata_counts)
+                    / (init_metadata.covers.get(cov_name).len() as f64).sqrt();
                 dis
             })
-            .sum::<f64>() / init_metadata.covers.names().len() as f64
-            + fastdtw_distance(&init_metadata.state_track, &metadata.state_track, 10)?
+            .sum::<f64>()
+            / init_metadata.covers.names().len() as f64;
+        let state_distantce =
+            fastdtw_distance(&init_metadata.state_track, &metadata.state_track, 10)?
                 / init_metadata.state_track.state_size() as f64;
+        println!("cover_distance: {}, state_distance: {}", cover_distance, state_distantce);
+        let distance = cover_distance + state_distantce;
 
         let similarity = distance_similarity(distance);
 
@@ -226,9 +229,19 @@ pub(crate) fn run_fuzzer(
 
     for cover_name in cover_names() {
         println!("init_case cover points of {cover_name}:");
-        for (point, cover) in init_metadata.covers.get(&cover_name).iter().enumerate() {
-            if *cover != 0 {
-                println!("cover point: {}", cover_point_name(&cover_name, point));
+        for (point, count) in init_metadata
+            .covers
+            .get(&cover_name)
+            .covered_counts()
+            .into_iter()
+            .enumerate()
+        {
+            if count != 0 {
+                println!(
+                    "cover point: \"{}\"({})",
+                    cover_point_name(&cover_name, point),
+                    count
+                );
             }
         }
     }
