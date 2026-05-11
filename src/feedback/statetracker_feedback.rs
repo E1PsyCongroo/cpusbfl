@@ -78,7 +78,8 @@ where
 
         let track = observers
             .get(&self.o_ref)
-            .expect("A StateTrackerFeedback needs a BacktraceObserver").get_state_tracker();
+            .expect("A StateTrackerFeedback needs a BacktraceObserver")
+            .get_state_tracker();
 
         let interesting = self
             .inner

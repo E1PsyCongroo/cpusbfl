@@ -13,10 +13,7 @@ use libafl_bolts::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    coverage::Coverages,
-    observer::coverages_observer::CoveragesObserver,
-};
+use crate::{coverage::Coverages, observer::coverages_observer::CoveragesObserver};
 
 pub const COVERAGSEFEEDBACK_PREFIX: &str = "coveragesfeedback_metadata_";
 

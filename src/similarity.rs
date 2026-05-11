@@ -1,8 +1,8 @@
-use dtw_rs::{fastdtw, Solution};
+use dtw_rs::{Solution, fastdtw};
 use ndarray::ArrayView1;
 
-use crate::state_tracker::StateTracker;
 use crate::coverage::CoveragePoint;
+use crate::state_tracker::StateTracker;
 
 pub(crate) fn euclidean_distance<T>(a: &[T], b: &[T]) -> f64
 where

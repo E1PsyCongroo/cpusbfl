@@ -2,11 +2,12 @@ use std::ffi::{CString, c_char, c_int, c_uint, c_void};
 use std::io::{self, Write};
 use std::sync::{Mutex, OnceLock};
 
+use libafl::prelude::*;
+
 use crate::coverage::*;
 use crate::monitor::store_testcase;
+use crate::pc_trace::*;
 use crate::state_tracker::*;
-
-use libafl::prelude::*;
 
 unsafe extern "C" {
     pub fn enable_sim_verbose();
@@ -36,6 +37,11 @@ unsafe extern "C" {
     pub fn update_stats_state(state_tracker: *mut c_void);
 
     pub fn set_state_feedback(name: *const c_char);
+
+    // pc trace
+    pub fn get_pc_trace_size() -> usize;
+
+    pub fn update_stats_pc_trace(pc_trace: *mut u64);
 
 }
 
@@ -137,4 +143,6 @@ pub(crate) fn set_sim_env(cover_names: String, verbose: bool, emu_args: Vec<Stri
     );
 
     state_tracker_init("ArchIntRegState".to_string());
+
+    pc_trace_init();
 }

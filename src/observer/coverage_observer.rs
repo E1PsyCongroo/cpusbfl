@@ -52,6 +52,11 @@ impl<T, I, S> Observer<I, S> for CoverageObserver<T>
 where
     T: CoveragePoint,
 {
+    fn pre_exec(&mut self, _state: &mut S, _input: &I) -> Result<(), Error> {
+        self.hash = None;
+        Ok(())
+    }
+
     fn post_exec(
         &mut self,
         _state: &mut S,

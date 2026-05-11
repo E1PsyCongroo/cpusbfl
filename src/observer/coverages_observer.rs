@@ -39,6 +39,11 @@ impl Named for CoveragesObserver {
 }
 
 impl<I, S> Observer<I, S> for CoveragesObserver {
+    fn pre_exec(&mut self, _state: &mut S, _input: &I) -> Result<(), Error> {
+        self.hash = None;
+        Ok(())
+    }
+
     fn post_exec(
         &mut self,
         _state: &mut S,

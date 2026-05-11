@@ -1,12 +1,14 @@
+mod bugloc;
 mod coverage;
 mod feedback;
 mod fuzzer;
 mod harness;
 mod monitor;
+mod mutator;
 mod observer;
-mod state_tracker;
-mod bugloc;
+mod pc_trace;
 mod similarity;
+mod state_tracker;
 
 use clap::Parser;
 
@@ -78,16 +80,20 @@ fn main() -> i32 {
     }
 
     if args.fuzzing {
-        if let Ok(passed_cov) = fuzzer::run_fuzzer(
+        match fuzzer::run_fuzzer(
             args.max_iters,
             args.max_run_timeout,
             args.top_pass,
             args.corpus_input,
             args.corpus_output,
         ) {
-            bugloc::report_suspicious(&passed_cov, args.top_sus as usize);
-        } else {
-            has_failed = 1;
+            Ok(passed_cov) => {
+                bugloc::report_suspicious(&passed_cov, args.top_sus as usize);
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                has_failed = 1;
+            }
         }
     }
 

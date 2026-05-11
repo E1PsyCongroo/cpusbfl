@@ -1,10 +1,10 @@
-use std::hash::{Hash, Hasher, DefaultHasher};
 use std::borrow::Cow;
+use std::hash::{DefaultHasher, Hash, Hasher};
 
 use libafl::{
     executors::ExitKind,
     observers::Observer,
-    prelude::{Error, ObserverWithHashField}
+    prelude::{Error, ObserverWithHashField},
 };
 use libafl_bolts::{Named, prelude::OwnedPtr};
 use serde::{Deserialize, Serialize};
@@ -39,6 +39,11 @@ impl Named for StateTrackerObserver {
 }
 
 impl<I, S> Observer<I, S> for StateTrackerObserver {
+    fn pre_exec(&mut self, _state: &mut S, _input: &I) -> Result<(), Error> {
+        self.hash = None;
+        Ok(())
+    }
+
     fn post_exec(
         &mut self,
         _state: &mut S,

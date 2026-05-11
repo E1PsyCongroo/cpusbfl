@@ -1,14 +1,19 @@
 use std::{fs, path::PathBuf, time::Duration};
 
 use dtw_rs::Distance;
-use libafl::{StdFuzzer, prelude::*, schedulers::QueueScheduler, state::StdState};
+use libafl::{
+    StdFuzzer, mutators::scheduled::SingleChoiceScheduledMutator as StdScheduledMutator,
+    prelude::*, schedulers::QueueScheduler, state::StdState,
+};
 use libafl_bolts::{current_nanos, rands::StdRand, tuples::tuple_list};
 
 use crate::coverage::*;
 use crate::feedback::{coverages_feedback::*, statetracker_feedback::*};
 use crate::harness;
 use crate::monitor;
+use crate::mutator::lastinst_mutator::*;
 use crate::observer::{coverages_observer::*, statetracker_observer::*};
+use crate::pc_trace::*;
 use crate::similarity::*;
 use crate::state_tracker::*;
 
@@ -91,7 +96,10 @@ fn emit_top_passed_testcases(
         let state_distantce =
             fastdtw_distance(&init_metadata.state_track, &metadata.state_track, 10)?
                 / init_metadata.state_track.state_size() as f64;
-        println!("cover_distance: {}, state_distance: {}", cover_distance, state_distantce);
+        println!(
+            "cover_distance: {}, state_distance: {}",
+            cover_distance, state_distantce
+        );
         let distance = cover_distance + state_distantce;
 
         let similarity = distance_similarity(distance);
@@ -189,10 +197,7 @@ pub(crate) fn run_fuzzer(
     )
     .unwrap();
 
-    // Fuzzing Loop
-    let mutator = HavocScheduledMutator::new(havoc_mutations());
-    let mut stages = tuple_list!(StdMutationalStage::new(mutator));
-
+    // Initial Case
     let init_bytes = load_initial_case(&corpus_input);
     let init_metadata;
     if let (ExecuteInputResult::Corpus, Some(init_corpus_id)) =
@@ -225,26 +230,34 @@ pub(crate) fn run_fuzzer(
         ))));
     }
 
+    pc_trace_update_stats();
+
+    let last_pc = pc_trace().as_slice()[0];
+
+    // Fuzzing Loop
+    let mutator = StdScheduledMutator::new(tuple_list!(LastInstMutator::new(last_pc)?));
+    let mut stages = tuple_list!(StdMutationalStage::new(mutator));
+
     fuzzer.fuzz_loop_for(&mut stages, &mut executor, &mut state, &mut mgr, max_iters)?;
 
-    for cover_name in cover_names() {
-        println!("init_case cover points of {cover_name}:");
-        for (point, count) in init_metadata
-            .covers
-            .get(&cover_name)
-            .covered_counts()
-            .into_iter()
-            .enumerate()
-        {
-            if count != 0 {
-                println!(
-                    "cover point: \"{}\"({})",
-                    cover_point_name(&cover_name, point),
-                    count
-                );
-            }
-        }
-    }
+    // for cover_name in cover_names() {
+    //     println!("init_case cover points of {cover_name}:");
+    //     for (point, count) in init_metadata
+    //         .covers
+    //         .get(&cover_name)
+    //         .covered_counts()
+    //         .into_iter()
+    //         .enumerate()
+    //     {
+    //         if count != 0 {
+    //             println!(
+    //                 "cover point: \"{}\"({})",
+    //                 cover_point_name(&cover_name, point),
+    //                 count
+    //             );
+    //         }
+    //     }
+    // }
 
     emit_top_passed_testcases(&state, init_metadata, top_n, corpus_output)
 }
