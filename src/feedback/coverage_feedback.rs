@@ -99,10 +99,6 @@ where
             .inner
             .is_interesting(state, manager, input, observers, exit_kind)?;
 
-        if !interesting {
-            return Ok(false);
-        }
-
         let obs = observers
             .get(&self.o_ref)
             .expect("A CoverageFeedback needs a BacktraceObserver");
@@ -112,7 +108,7 @@ where
             is_passed: matches!(exit_kind, ExitKind::Ok),
         });
 
-        Ok(true)
+        Ok(interesting)
     }
 
     fn append_metadata(
@@ -128,7 +124,7 @@ where
         let pending = self
             .pending
             .take()
-            .ok_or_else(|| Error::unknown("append_metadata called without pending metadata"))?;
+            .ok_or_else(|| Error::unknown("CoverageFeedback append_metadata called without pending metadata"))?;
 
         testcase.add_metadata(pending);
         Ok(())

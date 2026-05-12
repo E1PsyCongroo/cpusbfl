@@ -86,16 +86,12 @@ where
             .is_interesting(state, manager, input, observers, exit_kind)?
             && track.len() > 0;
 
-        if !interesting {
-            return Ok(false);
-        }
-
         self.pending = Some(StateTrackerMetadata {
             track: track.to_owned(),
             is_passed: matches!(exit_kind, ExitKind::Ok),
         });
 
-        Ok(true)
+        Ok(interesting)
     }
 
     fn append_metadata(
@@ -118,7 +114,7 @@ where
         let pending = self
             .pending
             .take()
-            .ok_or_else(|| Error::unknown("append_metadata called without pending metadata"))?;
+            .ok_or_else(|| Error::unknown("StateTrackerFeedback append_metadata called without pending metadata"))?;
 
         testcase.add_metadata(pending);
         Ok(())

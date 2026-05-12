@@ -94,7 +94,7 @@ fn emit_top_passed_testcases(
             .sum::<f64>()
             / init_metadata.covers.names().len() as f64;
         let state_distantce =
-            fastdtw_distance(&init_metadata.state_track, &metadata.state_track, 10)?
+            fastdtw_distance(&init_metadata.state_track, &metadata.state_track, 5)?
                 / init_metadata.state_track.state_size() as f64;
         println!(
             "cover_distance: {}, state_distance: {}",
@@ -164,7 +164,7 @@ pub(crate) fn run_fuzzer(
     let statetracker_observer =
         unsafe { StateTrackerObserver::from_raw("state_tracker", &tracker("ArchIntRegState")) };
 
-    let mut feedback = feedback_and!(
+    let mut feedback = EagerOrFeedback::new(
         CoveragesFeedback::new(&coverages_observer),
         StateTrackerFeedback::new(&statetracker_observer)
     );
