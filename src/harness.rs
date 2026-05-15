@@ -45,7 +45,7 @@ unsafe extern "C" {
 
 }
 
-static SIM_ARGS: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+pub(crate) static SIM_ARGS: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
 
 fn sim_run(workload: &String) -> i32 {
     // prepare the simulation arguments in Vec<String> format
@@ -115,7 +115,7 @@ pub(crate) fn fuzz_harness(input: &BytesInput) -> ExitKind {
     // save the target testcase into disk
     let do_save = unsafe { SAVE_ERRORS && ret != 0 };
     if do_save {
-        store_testcase(input, &"errors".to_string(), None);
+        store_testcase(input, None, &"errors".to_string(), None);
     }
 
     if ret != 0 {

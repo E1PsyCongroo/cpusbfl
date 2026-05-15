@@ -1,4 +1,4 @@
-use std::{borrow::Cow, fmt::Debug};
+use std::{borrow::Cow, fmt::Debug, future::Pending};
 
 use libafl::{
     Error, HasMetadata, HasNamedMetadata,
@@ -102,19 +102,21 @@ where
         self.inner
             .append_metadata(state, manager, observers, testcase)?;
 
-        let pending = self
-            .pending
-            .take()
-            .ok_or_else(|| Error::unknown("CoveragesFeedback append_metadata called without pending metadata"))?;
+        let pending = self.pending.take().ok_or_else(|| {
+            Error::unknown("CoveragesFeedback append_metadata called without pending metadata")
+        })?;
 
-        // println!("[Debug] Appending coverage metadata:");
-        // for (cover_name, cover) in pending.covers.iter() {
-        //     println!(
-        //         "[Debug] COVERAGE: {}, {}, {}",
-        //         cover_name,
-        //         cover.len(),
-        //         cover.iter().map(|&x| x as u64).sum::<u64>(),
-        //     );
+        // for cover_name in pending.covers.names() {
+        //     println!("[SBFL DEBUG] cover points of {cover_name}:");
+        //     for (point, count) in pending
+        //         .covers
+        //         .get(&cover_name)
+        //         .covered_counts()
+        //         .into_iter()
+        //         .enumerate()
+        //     {
+        //         println!("[{point}]: {count}");
+        //     }
         // }
 
         testcase.add_metadata(pending);

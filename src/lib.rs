@@ -21,6 +21,8 @@ struct Arguments {
     coverage: String,
     #[clap(default_value_t = false, short, long)]
     verbose: bool,
+    #[clap(default_value_t = 0x8000_0000, long)]
+    reset_vector: u64,
     #[clap(default_value_t = 100, long)]
     max_iters: u64,
     #[clap(default_value_t = 10, long)]

@@ -53,6 +53,8 @@ fn cal_suspicious(cover_name: &String, case_meta: &[CaseMetadata]) -> Vec<f64> {
 }
 
 pub(crate) fn report_suspicious(case_meta: &[CaseMetadata], top_n: usize) -> () {
+    let initial_case = case_meta.iter().find(|case| !case.is_passed).unwrap();
+
     for cover_name in cover_names() {
         let suspicious = cal_suspicious(&cover_name, case_meta);
         let mut indexed_suspicious: Vec<(usize, f64)> =
@@ -60,6 +62,16 @@ pub(crate) fn report_suspicious(case_meta: &[CaseMetadata], top_n: usize) -> () 
         indexed_suspicious.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
         println!("Suspiciousness of {cover_name} cover points:");
         for (rank, (point, score)) in indexed_suspicious.iter().take(top_n).enumerate() {
+            assert!(
+                initial_case
+                    .covers
+                    .get(&cover_name)
+                    .covered_bits()
+                    .get(*point)
+                    .unwrap(),
+                "point {} not in initial case",
+                cover_point_name(&cover_name, *point),
+            );
             println!(
                 "top-{}: Cover point {} with suspicious {:.6}",
                 rank + 1,

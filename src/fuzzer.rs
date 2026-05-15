@@ -5,11 +5,12 @@ use libafl::{
     StdFuzzer, mutators::scheduled::SingleChoiceScheduledMutator as StdScheduledMutator,
     prelude::*, schedulers::QueueScheduler, state::StdState,
 };
+use libafl_bolts::tuples::Append;
 use libafl_bolts::{current_nanos, rands::StdRand, tuples::tuple_list};
 
 use crate::coverage::*;
 use crate::feedback::{coverages_feedback::*, statetracker_feedback::*};
-use crate::harness;
+use crate::harness::{self, SIM_ARGS};
 use crate::monitor;
 use crate::mutator::lastinst_mutator::*;
 use crate::observer::{coverages_observer::*, statetracker_observer::*};
@@ -75,8 +76,8 @@ fn emit_top_passed_testcases(
         }
 
         let metadata = CaseMetadata {
-            covers: cover.covers.to_owned(),
-            state_track: track.track.to_owned(),
+            covers: cover.covers.clone(),
+            state_track: track.track.clone(),
             is_passed: cover.is_passed && track.is_passed,
         };
 
@@ -93,16 +94,17 @@ fn emit_top_passed_testcases(
             })
             .sum::<f64>()
             / init_metadata.covers.names().len() as f64;
+
         let state_distantce =
-            fastdtw_distance(&init_metadata.state_track, &metadata.state_track, 5)?
+            fastdtw_distance(&init_metadata.state_track, &metadata.state_track, 10)?
                 / init_metadata.state_track.state_size() as f64;
+
         println!(
             "cover_distance: {}, state_distance: {}",
             cover_distance, state_distantce
         );
-        let distance = cover_distance + state_distantce;
 
-        let similarity = distance_similarity(distance);
+        let distance = cover_distance + state_distantce;
 
         let input = testcase
             .input()
@@ -111,11 +113,11 @@ fn emit_top_passed_testcases(
                 "Corpus testcase {id} has no input"
             )))?;
 
-        passed_cases.push((usize::from(id), input.clone(), metadata, similarity));
+        passed_cases.push((usize::from(id), input.clone(), metadata, distance));
     }
 
     passed_cases.sort_by(|a, b| {
-        b.3.partial_cmp(&a.3)
+        a.3.partial_cmp(&b.3)
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| a.0.cmp(&b.0))
     });
@@ -127,18 +129,23 @@ fn emit_top_passed_testcases(
         limit
     );
 
+    // for (id, input, metadata, distance) in passed_cases.iter() {
+    //     let filename = format!("id_{:04}_dst_{:.6}", id, distance);
+    //     monitor::store_testcase(input, Some(metadata), &"debug2".to_string(), Some(filename));
+    // }
+
     let top_passed_cases: Vec<_> = passed_cases.into_iter().take(limit).collect();
-    for (rank, (id, input, _, similarity)) in top_passed_cases.iter().enumerate() {
+    for (rank, (id, input, metadata, distance)) in top_passed_cases.iter().enumerate() {
         println!(
-            "Top {} passed testcase: corpus_id={}, similarity={:.6}",
+            "Top {} passed testcase: corpus_id={}, distance={:.6}",
             rank + 1,
             id,
-            similarity
+            distance
         );
 
         if let Some(output_dir) = &corpus_output {
-            let filename = format!("rank_{:04}_id_{}_sim_{:.6}", rank + 1, id, similarity);
-            monitor::store_testcase(input, output_dir, Some(filename));
+            let filename = format!("rank_{:04}_id_{}_dst_{:.6}", rank + 1, id, distance);
+            monitor::store_testcase(input, Some(metadata), output_dir, Some(filename));
         }
     }
 
@@ -164,7 +171,7 @@ pub(crate) fn run_fuzzer(
     let statetracker_observer =
         unsafe { StateTrackerObserver::from_raw("state_tracker", &tracker("ArchIntRegState")) };
 
-    let mut feedback = EagerOrFeedback::new(
+    let mut feedback = feedback_or!(
         CoveragesFeedback::new(&coverages_observer),
         StateTrackerFeedback::new(&statetracker_observer)
     );
@@ -232,7 +239,14 @@ pub(crate) fn run_fuzzer(
 
     pc_trace_update_stats();
 
+    let max_inst = init_metadata.state_track.len();
     let last_pc = pc_trace().as_slice()[0];
+    SIM_ARGS
+        .get()
+        .unwrap()
+        .lock()
+        .expect("poisoned mutex")
+        .push(format!("-I {max_inst}"));
 
     // Fuzzing Loop
     let mutator = StdScheduledMutator::new(tuple_list!(LastInstMutator::new(last_pc)?));
@@ -249,13 +263,11 @@ pub(crate) fn run_fuzzer(
     //         .into_iter()
     //         .enumerate()
     //     {
-    //         if count != 0 {
-    //             println!(
-    //                 "cover point: \"{}\"({})",
-    //                 cover_point_name(&cover_name, point),
-    //                 count
-    //             );
-    //         }
+    //         println!(
+    //             "cover point: \"{}\"({})",
+    //             cover_point_name(&cover_name, point),
+    //             count
+    //         );
     //     }
     // }
 

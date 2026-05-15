@@ -40,22 +40,22 @@ where
         }
 
         let mutated_word = state.rand_mut().next().to_le_bytes();
-        let halfword = u16::from_le_bytes([mutated_word[0], mutated_word[1]]);
-        let inst_len = if halfword & 0b11 == 0b11 { 4 } else { 2 };
-        let Some(end_start) = self.offset.checked_add(inst_len) else {
-            return Ok(MutationResult::Skipped);
-        };
-        let Some(end_end) = end_start.checked_add(END_INST.len()) else {
-            return Ok(MutationResult::Skipped);
-        };
+        // let halfword = u16::from_le_bytes([mutated_word[0], mutated_word[1]]);
+        // let inst_len = if halfword & 0b11 == 0b11 { 4 } else { 2 };
+        // let Some(end_start) = self.offset.checked_add(inst_len) else {
+        //     return Ok(MutationResult::Skipped);
+        // };
+        // let Some(end_end) = end_start.checked_add(END_INST.len()) else {
+        //     return Ok(MutationResult::Skipped);
+        // };
 
-        if end_end > bytes_len {
-            return Ok(MutationResult::Skipped);
-        }
+        // if end_end > bytes_len {
+        //     return Ok(MutationResult::Skipped);
+        // }
 
         let bytes = input.mutator_bytes_mut();
         bytes[self.offset..mutated_end].copy_from_slice(&mutated_word[..4]);
-        bytes[end_start..end_end].copy_from_slice(&END_INST);
+        // bytes[end_start..end_end].copy_from_slice(&END_INST);
         Ok(MutationResult::Mutated)
     }
 
