@@ -13,29 +13,44 @@ use libafl_bolts::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{observer::statetracker_observer::StateTrackerObserver, state_tracker::StateTracker};
+use crate::{observer::statetracker_observer::StateTrackerObserver, state_tracker::*};
 
 pub const STATETRACKERFEEDBACK_PREFIX: &str = "statetrackerfeedback_metadata_";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StateTrackerMetadata {
-    pub track: StateTracker,
-    pub is_passed: bool,
+#[serde(bound(serialize = "T: State", deserialize = "T: State",))]
+pub struct StateTrackerMetadata<T>
+where
+    T: State,
+{
+    pub tracker: StateTracker<T>,
 }
 
-libafl_bolts::impl_serdeany!(StateTrackerMetadata);
+libafl_bolts::impl_serdeany!(
+    StateTrackerMetadata<T: State>,
+    <PCState>,
+    <ArchIntRegState>,
+    <CSRState>
+);
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct StateTrackerFeedback {
+#[serde(bound(serialize = "T: State", deserialize = "T: State",))]
+pub struct StateTrackerFeedback<T>
+where
+    T: State,
+{
     name: Cow<'static, str>,
-    o_ref: Handle<StateTrackerObserver>,
-    inner: NewHashFeedback<StateTrackerObserver>,
-    pending: Option<StateTrackerMetadata>,
+    o_ref: Handle<StateTrackerObserver<T>>,
+    inner: NewHashFeedback<StateTrackerObserver<T>>,
+    pending: Option<StateTrackerMetadata<T>>,
 }
 
-impl StateTrackerFeedback {
+impl<T> StateTrackerFeedback<T>
+where
+    T: State,
+{
     #[must_use]
-    pub fn new(observer: &StateTrackerObserver) -> Self {
+    pub fn new(observer: &StateTrackerObserver<T>) -> Self {
         Self {
             name: Cow::from(STATETRACKERFEEDBACK_PREFIX.to_string() + observer.name()),
             o_ref: observer.handle(),
@@ -45,15 +60,19 @@ impl StateTrackerFeedback {
     }
 }
 
-impl Named for StateTrackerFeedback {
+impl<T> Named for StateTrackerFeedback<T>
+where
+    T: State,
+{
     #[inline]
     fn name(&self) -> &Cow<'static, str> {
         &self.name
     }
 }
 
-impl<S> StateInitializer<S> for StateTrackerFeedback
+impl<T, S> StateInitializer<S> for StateTrackerFeedback<T>
 where
+    T: State,
     S: HasNamedMetadata,
 {
     fn init_state(&mut self, state: &mut S) -> Result<(), Error> {
@@ -61,8 +80,9 @@ where
     }
 }
 
-impl<EM, I, OT, S> Feedback<EM, I, OT, S> for StateTrackerFeedback
+impl<T, EM, I, OT, S> Feedback<EM, I, OT, S> for StateTrackerFeedback<T>
 where
+    T: State,
     OT: MatchName,
     S: HasNamedMetadata,
 {
@@ -76,7 +96,7 @@ where
     ) -> Result<bool, Error> {
         self.pending = None;
 
-        let track = observers
+        let tracker = observers
             .get(&self.o_ref)
             .expect("A StateTrackerFeedback needs a BacktraceObserver")
             .get_state_tracker();
@@ -84,11 +104,10 @@ where
         let interesting = self
             .inner
             .is_interesting(state, manager, input, observers, exit_kind)?
-            && track.len() > 0;
+            && tracker.len() > 0;
 
         self.pending = Some(StateTrackerMetadata {
-            track: track.to_owned(),
-            is_passed: matches!(exit_kind, ExitKind::Ok),
+            tracker: tracker.to_owned(),
         });
 
         Ok(interesting)
@@ -104,17 +123,16 @@ where
         self.inner
             .append_metadata(state, manager, observers, testcase)?;
 
-        // println!("[Debug] Appending state tracker metadata:");
-        // println!(
-        //     "[Debug] State tracker has {} states of size {}",
-        //     self.pending.as_ref().unwrap().track.len(),
-        //     self.pending.as_ref().unwrap().track.state_size()
-        // );
+        println!("[Debug] Appending state tracker metadata:");
+        println!(
+            "[Debug] State tracker has {} states: {:?}",
+            self.pending.as_ref().unwrap().tracker.len(),
+            self.pending.as_ref().unwrap().tracker
+        );
 
-        let pending = self
-            .pending
-            .take()
-            .ok_or_else(|| Error::unknown("StateTrackerFeedback append_metadata called without pending metadata"))?;
+        let pending = self.pending.take().ok_or_else(|| {
+            Error::unknown("StateTrackerFeedback append_metadata called without pending metadata")
+        })?;
 
         testcase.add_metadata(pending);
         Ok(())

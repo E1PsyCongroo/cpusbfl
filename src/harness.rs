@@ -1,12 +1,15 @@
-use std::ffi::{CString, c_char, c_int, c_uint, c_void};
-use std::io::{self, Write};
-use std::sync::{Mutex, OnceLock};
+use std::{
+    ffi::{CString, c_char, c_int, c_uint, c_void},
+    fs,
+    io::{self, Write},
+    path::PathBuf,
+    sync::{Mutex, OnceLock},
+};
 
 use libafl::prelude::*;
 
 use crate::coverage::*;
 use crate::monitor::store_testcase;
-use crate::pc_trace::*;
 use crate::state_tracker::*;
 
 unsafe extern "C" {
@@ -32,17 +35,9 @@ unsafe extern "C" {
     // state
     pub fn get_state_number() -> usize;
 
-    pub fn get_state_size() -> usize;
-
     pub fn update_stats_state(state_tracker: *mut c_void);
 
     pub fn set_state_feedback(name: *const c_char);
-
-    // pc trace
-    pub fn get_pc_trace_size() -> usize;
-
-    pub fn update_stats_pc_trace(pc_trace: *mut u64);
-
 }
 
 pub(crate) static SIM_ARGS: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
@@ -70,9 +65,6 @@ fn sim_run(workload: &String) -> i32 {
 
     // send simulation arguments to sim_main and get the return code
     let ret = unsafe { sim_main(sim_args.len() as i32, p_argv.as_ptr()) };
-    all_cover_update_stats();
-    all_cover_accumulate();
-    all_tracker_update_stats();
 
     ret
 }
@@ -103,8 +95,80 @@ pub(crate) fn sim_run_multiple(workloads: &Vec<String>, auto_exit: bool) -> i32 
 
 pub static mut SAVE_ERRORS: bool = false;
 
+pub(crate) fn load_initial_case(corpus_input: &String) -> BytesInput {
+    let path = PathBuf::from(corpus_input);
+    let input_path = if path.is_file() {
+        path.clone()
+    } else if path.is_dir() {
+        let mut entries = fs::read_dir(&path)
+            .unwrap_or_else(|err| panic!("Failed to read corpus_input {path:?}: {err}"))
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|entry_path| entry_path.is_file())
+            .collect::<Vec<_>>();
+        entries.sort();
+        entries
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| panic!("No testcase found in corpus_input directory {path:?}"))
+    } else {
+        panic!("corpus_input {path:?} is neither a file nor a directory")
+    };
+
+    let bytes = fs::read(&input_path)
+        .unwrap_or_else(|err| panic!("Failed to read initial fault case {input_path:?}: {err}"));
+
+    BytesInput::new(bytes)
+}
+
+pub(crate) fn sim_run_with_trackers(input: &BytesInput) -> ExitKind {
+    let ret = sim_run_from_memory(input);
+
+    trackers().pc_tracker.update();
+    trackers().arch_int_reg_tracker.update();
+    trackers().csr_tracker.update();
+
+    io::stdout().flush().unwrap();
+
+    if ret != 0 {
+        ExitKind::Crash
+    } else {
+        ExitKind::Ok
+    }
+}
+
+pub(crate) fn sim_with_max_inst<T>(max_inst: usize, f: impl FnOnce() -> T) -> T {
+    let original_args = SIM_ARGS
+        .get()
+        .expect("SIM_ARGS not initialized")
+        .lock()
+        .expect("poisoned mutex")
+        .clone();
+    SIM_ARGS
+        .get()
+        .expect("SIM_ARGS not initialized")
+        .lock()
+        .expect("poisoned mutex")
+        .push(format!("-I {max_inst}"));
+
+    let ret = f();
+
+    SIM_ARGS
+        .get()
+        .expect("SIM_ARGS not initialized")
+        .lock()
+        .expect("poisoned mutex")
+        .clone_from(&original_args);
+
+    ret
+}
+
 pub(crate) fn fuzz_harness(input: &BytesInput) -> ExitKind {
     let ret = sim_run_from_memory(input);
+
+    all_cover_update();
+    all_cover_accumulate();
+    all_tracker_update();
 
     // get coverage
     for cover_name in cover_names() {
@@ -125,7 +189,12 @@ pub(crate) fn fuzz_harness(input: &BytesInput) -> ExitKind {
     }
 }
 
-pub(crate) fn set_sim_env(cover_names: String, verbose: bool, emu_args: Vec<String>) {
+pub(crate) fn set_sim_env(
+    cover_names: String,
+    state_names: String,
+    verbose: bool,
+    emu_args: Vec<String>,
+) {
     if verbose {
         unsafe { enable_sim_verbose() }
     } else {
@@ -142,7 +211,11 @@ pub(crate) fn set_sim_env(cover_names: String, verbose: bool, emu_args: Vec<Stri
             .collect(),
     );
 
-    state_tracker_init("ArchIntRegState".to_string());
-
-    pc_trace_init();
+    state_tracker_init(
+        state_names
+            .split(',')
+            .filter(|s| !s.is_empty())
+            .map(|s| s.trim().to_string())
+            .collect(),
+    );
 }

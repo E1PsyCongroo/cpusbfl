@@ -1,8 +1,8 @@
-use dtw_rs::{Solution, fastdtw};
+use dtw_rs::{Solution, dtw, fastdtw};
 use ndarray::ArrayView1;
 
-use crate::coverage::CoveragePoint;
-use crate::state_tracker::StateTracker;
+use crate::coverage::*;
+use crate::state_tracker::*;
 
 pub(crate) fn euclidean_distance<T>(a: &[T], b: &[T]) -> f64
 where
@@ -22,19 +22,14 @@ where
     dist_sq.sqrt()
 }
 
-pub(crate) fn fastdtw_distance(
-    a: &StateTracker,
-    b: &StateTracker,
+pub(crate) fn fastdtw_distance<T>(
+    a: &StateTracker<T>,
+    b: &StateTracker<T>,
     radius: usize,
-) -> Result<f64, String> {
-    if a.state_size() != b.state_size() {
-        return Err(format!(
-            "state size mismatch : {} vs {}",
-            a.state_size(),
-            b.state_size(),
-        ));
-    }
-
+) -> Result<f64, String>
+where
+    T: State,
+{
     let solution = fastdtw(a.as_slice(), b.as_slice(), radius);
     let path_len = solution.path().len().max(1) as f64;
     Ok(solution.distance() / path_len)

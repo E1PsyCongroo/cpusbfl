@@ -6,7 +6,7 @@ mod harness;
 mod monitor;
 mod mutator;
 mod observer;
-mod pc_trace;
+mod reduce;
 mod similarity;
 mod state_tracker;
 
@@ -19,6 +19,8 @@ struct Arguments {
     fuzzing: bool,
     #[clap(default_value_t = String::from("llvm.branch"), short, long)]
     coverage: String,
+    #[clap(default_value_t = String::from("PCState,ArchIntRegState,CSRState"), short, long)]
+    state: String,
     #[clap(default_value_t = false, short, long)]
     verbose: bool,
     #[clap(default_value_t = 0x8000_0000, long)]
@@ -37,6 +39,8 @@ struct Arguments {
     corpus_output: Option<String>,
     #[clap(default_value_t = false, long)]
     save_errors: bool,
+    #[clap(default_value_t = false, long)]
+    save_reduce: bool,
     // Run options
     #[clap(default_value_t = 1, long)]
     repeat: usize,
@@ -65,7 +69,7 @@ fn main() -> i32 {
         }
     }
 
-    harness::set_sim_env(args.coverage, args.verbose, emu_args);
+    harness::set_sim_env(args.coverage, args.state, args.verbose, emu_args);
 
     let mut has_failed = 0;
     if workloads.len() > 0 {
@@ -82,12 +86,25 @@ fn main() -> i32 {
     }
 
     if args.fuzzing {
+        let input_case = harness::load_initial_case(&args.corpus_input);
+        harness::sim_run_with_trackers(&input_case);
+        let original_trakcers = state_tracker::trackers().clone();
+
+        let init_case = reduce::reduce_fault_case(
+            &input_case,
+            &original_trakcers,
+            args.reset_vector,
+            args.save_reduce,
+            &args.corpus_output,
+        );
+
         match fuzzer::run_fuzzer(
             args.max_iters,
             args.max_run_timeout,
             args.top_pass,
-            args.corpus_input,
-            args.corpus_output,
+            args.reset_vector,
+            &init_case,
+            &args.corpus_output,
         ) {
             Ok(passed_cov) => {
                 bugloc::report_suspicious(&passed_cov, args.top_sus as usize);

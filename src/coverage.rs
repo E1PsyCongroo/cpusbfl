@@ -7,25 +7,19 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-use crate::harness::*;
+use crate::harness::{set_cover_feedback as ffi_set_cover_feedback, *};
 
-fn set_cover_feedback_by_name(cover_name: &str) {
-    unsafe { set_cover_feedback(CString::new(cover_name.as_bytes()).unwrap().as_ptr()) }
+unsafe fn set_cover_feedback(cover_name: &str) {
+    unsafe { ffi_set_cover_feedback(CString::new(cover_name.as_bytes()).unwrap().as_ptr()) }
 }
 
 pub(crate) trait CoveragePoint:
-    Copy + Clone + Default + Debug + Hash + PartialEq + Serialize + for<'de> Deserialize<'de> + 'static
+    Copy + Clone + Default + Debug + Hash + Eq + PartialEq + Serialize + DeserializeOwned + 'static
 {
     fn is_covered(self) -> bool {
         self != Self::default()
-    }
-
-    fn update_stats(ptr: *mut Self) {
-        unsafe {
-            update_stats_cover(ptr as *mut c_void);
-        }
     }
 
     fn as_u64(self) -> u64;
@@ -55,6 +49,7 @@ pub(crate) struct Coverage<T = u64>
 where
     T: CoveragePoint,
 {
+    name: String,
     point_counts: Vec<T>,
 }
 
@@ -62,14 +57,22 @@ impl<T> Coverage<T>
 where
     T: CoveragePoint,
 {
-    pub fn new(n_cover: usize) -> Self {
+    pub fn new(name: &str, n_cover: usize) -> Self {
         Self {
+            name: name.to_string(),
             point_counts: vec![T::default(); n_cover],
         }
     }
 
     pub fn len(&self) -> usize {
         self.point_counts.len()
+    }
+
+    pub fn update(&mut self) {
+        unsafe {
+            set_cover_feedback(&self.name);
+            update_stats_cover(self.point_counts.as_mut_ptr() as *mut c_void);
+        }
     }
 
     pub fn as_slice(&self) -> &[T] {
@@ -121,11 +124,11 @@ pub(crate) enum AnyCoverage {
 }
 
 impl AnyCoverage {
-    pub fn new(kind: CoverageKind, n_cover: usize) -> Self {
+    pub fn new(kind: CoverageKind, name: &str, n_cover: usize) -> Self {
         match kind {
-            CoverageKind::Bool => Self::Bool(Coverage::<bool>::new(n_cover)),
-            CoverageKind::U8 => Self::U8(Coverage::<u8>::new(n_cover)),
-            CoverageKind::U64 => Self::U64(Coverage::<u64>::new(n_cover)),
+            CoverageKind::Bool => Self::Bool(Coverage::<bool>::new(name, n_cover)),
+            CoverageKind::U8 => Self::U8(Coverage::<u8>::new(name, n_cover)),
+            CoverageKind::U64 => Self::U64(Coverage::<u64>::new(name, n_cover)),
         }
     }
 
@@ -137,11 +140,11 @@ impl AnyCoverage {
         }
     }
 
-    pub fn update_stats(&mut self) {
+    pub fn update(&mut self) {
         match self {
-            Self::Bool(c) => bool::update_stats(c.as_mut_ptr()),
-            Self::U8(c) => u8::update_stats(c.as_mut_ptr()),
-            Self::U64(c) => u64::update_stats(c.as_mut_ptr()),
+            Self::Bool(c) => c.update(),
+            Self::U8(c) => c.update(),
+            Self::U64(c) => c.update(),
         }
     }
 
@@ -182,7 +185,7 @@ impl Coverages {
         let mut covers = HashMap::new();
 
         for cover_name in cover_names {
-            set_cover_feedback_by_name(cover_name);
+            unsafe { set_cover_feedback(&cover_name) };
             let data_size = unsafe { get_cover_data_size() };
             let n_cover = unsafe { get_cover_number() as usize };
             covers.insert(
@@ -193,6 +196,7 @@ impl Coverages {
                     } else {
                         CoverageKind::U8
                     },
+                    cover_name,
                     n_cover,
                 ),
             );
@@ -229,9 +233,14 @@ impl Coverages {
         self.covers.keys().cloned().collect()
     }
 
-    pub fn update_stats(&mut self, cover_name: &str) {
-        set_cover_feedback_by_name(cover_name);
-        self.get_mut(cover_name).update_stats();
+    pub fn update(&mut self, cover_name: &str) {
+        self.get_mut(cover_name).update();
+    }
+
+    pub fn update_all(&mut self) {
+        for cover_name in self.names() {
+            self.update(&cover_name);
+        }
     }
 }
 
@@ -256,7 +265,7 @@ impl AccumulatedCoverages {
         let mut covers = HashMap::new();
 
         for cover_name in cover_names {
-            set_cover_feedback_by_name(&cover_name);
+            unsafe { set_cover_feedback(cover_name) };
             let n_cover = unsafe { get_cover_number() as usize };
             covers.insert(cover_name.clone(), vec![false; n_cover]);
         }
@@ -325,7 +334,7 @@ pub(crate) fn cover_len(cover_name: &str) -> usize {
 
 pub(crate) fn cover_point_name(cover_name: &str, i: usize) -> String {
     let cover_point_name = unsafe {
-        set_cover_feedback_by_name(cover_name);
+        set_cover_feedback(cover_name);
         get_cover_point_name(i)
     };
     if cover_point_name.is_null() {
@@ -336,10 +345,6 @@ pub(crate) fn cover_point_name(cover_name: &str, i: usize) -> String {
             .map(|s| s.to_owned())
             .unwrap_or_else(|_| format!("{}[{}]", cover_name, i))
     }
-}
-
-pub(crate) fn cover_update_stats(cover_name: &str) {
-    coverages().update_stats(cover_name);
 }
 
 pub(crate) fn cover_accumulate(cover_name: &str) {
@@ -362,9 +367,10 @@ pub(crate) fn cover_display(cover_name: &str) {
     )
 }
 
-pub(crate) fn all_cover_update_stats() {
-    for cover_name in cover_names() {
-        cover_update_stats(&cover_name);
+pub(crate) fn all_cover_update() {
+    let mut guard = coverages();
+    for cover_name in guard.names() {
+        guard.update(&cover_name);
     }
 }
 

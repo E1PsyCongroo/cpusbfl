@@ -1,52 +1,24 @@
-use std::{fs, path::PathBuf, time::Duration};
+use std::{path::PathBuf, time::Duration};
 
-use dtw_rs::Distance;
 use libafl::{
     StdFuzzer, mutators::scheduled::SingleChoiceScheduledMutator as StdScheduledMutator,
     prelude::*, schedulers::QueueScheduler, state::StdState,
 };
-use libafl_bolts::tuples::Append;
 use libafl_bolts::{current_nanos, rands::StdRand, tuples::tuple_list};
 
 use crate::coverage::*;
-use crate::feedback::{coverages_feedback::*, statetracker_feedback::*};
-use crate::harness::{self, SIM_ARGS};
-use crate::monitor;
+use crate::feedback::{coverages_feedback::*, passed_feedback::*, statetrackers_feedback::*};
+use crate::harness::{self, SIM_ARGS, sim_run_with_trackers};
+use crate::monitor::{self, store_testcase};
 use crate::mutator::lastinst_mutator::*;
-use crate::observer::{coverages_observer::*, statetracker_observer::*};
-use crate::pc_trace::*;
+use crate::observer::{coverages_observer::*, statetrackers_observer::*};
+use crate::reduce::*;
 use crate::similarity::*;
 use crate::state_tracker::*;
 
-fn load_initial_case(corpus_input: &String) -> BytesInput {
-    let path = PathBuf::from(corpus_input);
-    let input_path = if path.is_file() {
-        path.clone()
-    } else if path.is_dir() {
-        let mut entries = fs::read_dir(&path)
-            .unwrap_or_else(|err| panic!("Failed to read corpus_input {path:?}: {err}"))
-            .filter_map(|entry| entry.ok())
-            .map(|entry| entry.path())
-            .filter(|entry_path| entry_path.is_file())
-            .collect::<Vec<_>>();
-        entries.sort();
-        entries
-            .into_iter()
-            .next()
-            .unwrap_or_else(|| panic!("No testcase found in corpus_input directory {path:?}"))
-    } else {
-        panic!("corpus_input {path:?} is neither a file nor a directory")
-    };
-
-    let bytes = fs::read(&input_path)
-        .unwrap_or_else(|err| panic!("Failed to read initial fault case {input_path:?}: {err}"));
-
-    BytesInput::new(bytes)
-}
-
 pub(crate) struct CaseMetadata {
     pub covers: Coverages,
-    pub state_track: StateTracker,
+    pub state_trackers: StateTrackers,
     pub is_passed: bool,
 }
 
@@ -59,7 +31,7 @@ fn emit_top_passed_testcases(
     >,
     init_metadata: CaseMetadata,
     top_n: u64,
-    corpus_output: Option<String>,
+    corpus_output: &Option<String>,
 ) -> Result<Vec<CaseMetadata>, Box<dyn std::error::Error>> {
     let corpus = state.corpus();
     let mut passed_cases = Vec::new();
@@ -67,18 +39,18 @@ fn emit_top_passed_testcases(
     for id in corpus.ids() {
         let testcase = corpus.get(id)?.borrow();
 
+        let passed = testcase.metadata::<PassedMetadata>()?.is_passed;
         let cover = testcase.metadata::<CoveragesMetadata>()?;
-        let track = testcase.metadata::<StateTrackerMetadata>()?;
-        assert_eq!(cover.is_passed, track.is_passed);
+        let tracker = testcase.metadata::<StateTrackersMetadata>()?;
 
-        if !cover.is_passed || !track.is_passed {
+        if !passed {
             continue;
         }
 
         let metadata = CaseMetadata {
             covers: cover.covers.clone(),
-            state_track: track.track.clone(),
-            is_passed: cover.is_passed && track.is_passed,
+            state_trackers: tracker.trackers.clone(),
+            is_passed: passed,
         };
 
         let cover_distance = init_metadata
@@ -95,16 +67,16 @@ fn emit_top_passed_testcases(
             .sum::<f64>()
             / init_metadata.covers.names().len() as f64;
 
-        let state_distantce =
-            fastdtw_distance(&init_metadata.state_track, &metadata.state_track, 10)?
-                / init_metadata.state_track.state_size() as f64;
+        // let state_distance =
+        //     fastdtw_distance(&init_metadata.state_trackers, &metadata.state_trackers, 10)?;
+        let state_distance = 0f64;
 
         println!(
             "cover_distance: {}, state_distance: {}",
-            cover_distance, state_distantce
+            cover_distance, state_distance
         );
 
-        let distance = cover_distance + state_distantce;
+        let distance = cover_distance + state_distance;
 
         let input = testcase
             .input()
@@ -161,19 +133,23 @@ pub(crate) fn run_fuzzer(
     max_iters: u64,
     max_run_timeout: u64,
     top_n: u64,
-    corpus_input: String,
-    corpus_output: Option<String>,
+    reset_vector: u64,
+    init_case: &BytesInput,
+    corpus_output: &Option<String>,
 ) -> Result<Vec<CaseMetadata>, Box<dyn std::error::Error>> {
     // Scheduler, Feedback, Objective
     let scheduler = QueueScheduler::new();
 
     let coverages_observer = unsafe { CoveragesObserver::from_raw("coverages", &coverages()) };
-    let statetracker_observer =
-        unsafe { StateTrackerObserver::from_raw("state_tracker", &tracker("ArchIntRegState")) };
+    let statetrackers_observer =
+        unsafe { StateTrackersObserver::from_raw("state_trackers", &trackers()) };
 
-    let mut feedback = feedback_or!(
-        CoveragesFeedback::new(&coverages_observer),
-        StateTrackerFeedback::new(&statetracker_observer)
+    let mut feedback = feedback_and!(
+        PassedFeedback::new(),
+        feedback_or!(
+            CoveragesFeedback::new(&coverages_observer),
+            StateTrackersFeedback::new(&statetrackers_observer)
+        )
     );
     let mut objective = ConstFeedback::new(false);
 
@@ -196,7 +172,7 @@ pub(crate) fn run_fuzzer(
     let mut binding = harness::fuzz_harness;
     let mut executor = InProcessExecutor::with_timeout(
         &mut binding,
-        tuple_list!(coverages_observer, statetracker_observer),
+        tuple_list!(coverages_observer, statetrackers_observer),
         &mut fuzzer,
         &mut state,
         &mut mgr,
@@ -205,42 +181,42 @@ pub(crate) fn run_fuzzer(
     .unwrap();
 
     // Initial Case
-    let init_bytes = load_initial_case(&corpus_input);
+
     let init_metadata;
     if let (ExecuteInputResult::Corpus, Some(init_corpus_id)) =
-        fuzzer.evaluate_input(&mut state, &mut executor, &mut mgr, &init_bytes)?
+        fuzzer.evaluate_input(&mut state, &mut executor, &mut mgr, init_case)?
     {
         let init_testcase = state.corpus_mut().get(init_corpus_id)?.borrow_mut();
 
-        let init_cover = init_testcase.metadata::<CoveragesMetadata>()?;
-        if init_cover.is_passed {
+        let init_passed = init_testcase.metadata::<PassedMetadata>()?.is_passed;
+        if init_passed {
             return Err(Box::new(Error::illegal_argument(format!(
-                "Initial case from {corpus_input:?} did not crash"
+                "Initial case did not crash"
             ))));
         }
 
-        let init_state = init_testcase.metadata::<StateTrackerMetadata>()?;
-        if init_cover.is_passed {
-            return Err(Box::new(Error::illegal_argument(format!(
-                "Initial case from {corpus_input:?} did not crash"
-            ))));
-        }
+        let init_cover = init_testcase.metadata::<CoveragesMetadata>()?;
+        let init_state = init_testcase.metadata::<StateTrackersMetadata>()?;
 
         init_metadata = CaseMetadata {
             covers: init_cover.covers.to_owned(),
-            state_track: init_state.track.to_owned(),
-            is_passed: false,
+            state_trackers: init_state.trackers.to_owned(),
+            is_passed: init_passed,
         };
     } else {
         return Err(Box::new(Error::illegal_argument(format!(
-            "Initial case from {corpus_input:?} was not accepted into the main corpus by feedback"
+            "Initial case was not accepted into the main corpus by feedback"
         ))));
     }
 
-    pc_trace_update_stats();
-
-    let max_inst = init_metadata.state_track.len();
-    let last_pc = pc_trace().as_slice()[0];
+    let max_inst = init_metadata.state_trackers.len();
+    let last_pc = init_metadata
+        .state_trackers
+        .pc_tracker
+        .as_slice()
+        .last()
+        .unwrap()
+        .value;
     SIM_ARGS
         .get()
         .unwrap()
@@ -249,7 +225,8 @@ pub(crate) fn run_fuzzer(
         .push(format!("-I {max_inst}"));
 
     // Fuzzing Loop
-    let mutator = StdScheduledMutator::new(tuple_list!(LastInstMutator::new(last_pc)?));
+    let mutator =
+        StdScheduledMutator::new(tuple_list!(LastInstMutator::new(reset_vector, last_pc)?));
     let mut stages = tuple_list!(StdMutationalStage::new(mutator));
 
     fuzzer.fuzz_loop_for(&mut stages, &mut executor, &mut state, &mut mgr, max_iters)?;

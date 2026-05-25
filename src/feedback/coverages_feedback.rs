@@ -20,7 +20,6 @@ pub const COVERAGSEFEEDBACK_PREFIX: &str = "coveragesfeedback_metadata_";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CoveragesMetadata {
     pub covers: Coverages,
-    pub is_passed: bool,
 }
 
 libafl_bolts::impl_serdeany!(CoveragesMetadata);
@@ -86,7 +85,6 @@ where
 
         self.pending = Some(CoveragesMetadata {
             covers: obs.get_coverages().to_owned(),
-            is_passed: matches!(exit_kind, ExitKind::Ok),
         });
 
         Ok(interesting)

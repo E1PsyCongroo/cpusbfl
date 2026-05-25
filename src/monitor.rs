@@ -50,7 +50,7 @@ use crate::state_tracker::*;
 pub fn store_testcase(
     input: &BytesInput,
     metadata: Option<&CaseMetadata>,
-    output_dir: &String,
+    output_dir: &str,
     name: Option<String>,
 ) {
     fs::create_dir_all(&output_dir).expect("Unable to create the output directory");
@@ -100,15 +100,13 @@ pub fn store_testcase(
             .open(PathBuf::from(format!("{output_dir}/{filename}.state")).as_path())
             .unwrap();
 
-        for (idx, state) in metadata.state_track.iter().enumerate() {
+        for idx in 0..metadata.state_trackers.len() {
             writeln!(
                 state_file,
-                "[{idx}]: {}",
-                state
-                    .as_slice()
-                    .iter()
-                    .map(|s| format!("{:02x}", s))
-                    .collect::<String>()
+                "[{idx}]: PCState({:?}), ArchIntRegState({:?}), CSRState({:?})",
+                metadata.state_trackers.pc_tracker.as_slice()[idx],
+                metadata.state_trackers.arch_int_reg_tracker.as_slice()[idx],
+                metadata.state_trackers.csr_tracker.as_slice()[idx],
             )
             .unwrap();
         }

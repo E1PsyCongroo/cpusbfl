@@ -13,44 +13,30 @@ use libafl_bolts::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    coverage::{Coverage, CoveragePoint},
-    observer::coverage_observer::CoverageObserver,
-};
+use crate::{observer::statetrackers_observer::StateTrackersObserver, state_tracker::*};
 
-pub const COVERAGEFEEDBACK_PREFIX: &str = "coveragefeedback_metadata_";
+pub const STATETRACKERSFEEDBACK_PREFIX: &str = "statetrackersfeedback_metadata_";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(bound(serialize = "T: CoveragePoint", deserialize = "T: CoveragePoint"))]
-pub struct CoverageMetadata<T>
-where
-    T: CoveragePoint,
-{
-    pub cover: Coverage<T>,
+pub struct StateTrackersMetadata {
+    pub trackers: StateTrackers,
 }
 
-libafl_bolts::impl_serdeany!(CoverageMetadata<T: CoveragePoint>, <bool>, <u8>, <u64>);
+libafl_bolts::impl_serdeany!(StateTrackersMetadata);
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(bound(serialize = "T: CoveragePoint", deserialize = "T: CoveragePoint"))]
-pub struct CoverageFeedback<T>
-where
-    T: CoveragePoint,
-{
+pub struct StateTrackersFeedback {
     name: Cow<'static, str>,
-    o_ref: Handle<CoverageObserver<T>>,
-    inner: NewHashFeedback<CoverageObserver<T>>,
-    pending: Option<CoverageMetadata<T>>,
+    o_ref: Handle<StateTrackersObserver>,
+    inner: NewHashFeedback<StateTrackersObserver>,
+    pending: Option<StateTrackersMetadata>,
 }
 
-impl<T> CoverageFeedback<T>
-where
-    T: CoveragePoint,
-{
+impl StateTrackersFeedback {
     #[must_use]
-    pub fn new(observer: &CoverageObserver<T>) -> Self {
+    pub fn new(observer: &StateTrackersObserver) -> Self {
         Self {
-            name: Cow::from(COVERAGEFEEDBACK_PREFIX.to_string() + observer.name()),
+            name: Cow::from(STATETRACKERSFEEDBACK_PREFIX.to_string() + observer.name()),
             o_ref: observer.handle(),
             inner: NewHashFeedback::new(observer),
             pending: None,
@@ -58,31 +44,26 @@ where
     }
 }
 
-impl<T> Named for CoverageFeedback<T>
-where
-    T: CoveragePoint,
-{
+impl Named for StateTrackersFeedback {
     #[inline]
     fn name(&self) -> &Cow<'static, str> {
         &self.name
     }
 }
 
-impl<T, S> StateInitializer<S> for CoverageFeedback<T>
+impl<S> StateInitializer<S> for StateTrackersFeedback
 where
     S: HasNamedMetadata,
-    T: CoveragePoint,
 {
     fn init_state(&mut self, state: &mut S) -> Result<(), Error> {
         self.inner.init_state(state)
     }
 }
 
-impl<T, EM, I, OT, S> Feedback<EM, I, OT, S> for CoverageFeedback<T>
+impl<EM, I, OT, S> Feedback<EM, I, OT, S> for StateTrackersFeedback
 where
     OT: MatchName,
     S: HasNamedMetadata,
-    T: CoveragePoint,
 {
     fn is_interesting(
         &mut self,
@@ -94,16 +75,18 @@ where
     ) -> Result<bool, Error> {
         self.pending = None;
 
+        let trackers = observers
+            .get(&self.o_ref)
+            .expect("A StateTrackersFeedback needs a BacktraceObserver")
+            .get_state_tracker();
+
         let interesting = self
             .inner
-            .is_interesting(state, manager, input, observers, exit_kind)?;
+            .is_interesting(state, manager, input, observers, exit_kind)?
+            && trackers.len() > 0;
 
-        let obs = observers
-            .get(&self.o_ref)
-            .expect("A CoverageFeedback needs a BacktraceObserver");
-
-        self.pending = Some(CoverageMetadata {
-            cover: obs.get_coverage().to_owned(),
+        self.pending = Some(StateTrackersMetadata {
+            trackers: trackers.to_owned(),
         });
 
         Ok(interesting)
@@ -119,8 +102,15 @@ where
         self.inner
             .append_metadata(state, manager, observers, testcase)?;
 
+        // println!("[Debug] Appending state trackers metadata:");
+        // println!(
+        //     "[Debug] State trackers has {} states: {:?}",
+        //     self.pending.as_ref().unwrap().trackers.len(),
+        //     self.pending.as_ref().unwrap().trackers
+        // );
+
         let pending = self.pending.take().ok_or_else(|| {
-            Error::unknown("CoverageFeedback append_metadata called without pending metadata")
+            Error::unknown("StateTrackersFeedback append_metadata called without pending metadata")
         })?;
 
         testcase.add_metadata(pending);

@@ -15,46 +15,33 @@ use serde::{Deserialize, Serialize};
 use crate::state_tracker::*;
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
-#[serde(bound(serialize = "T: State", deserialize = "T: State",))]
-pub struct StateTrackerObserver<T>
-where
-    T: State,
-{
+pub struct StateTrackersObserver {
     name: Cow<'static, str>,
-    tracker: OwnedPtr<StateTracker<T>>,
+    trackers: OwnedPtr<StateTrackers>,
     hash: Option<u64>,
 }
 
-impl<T> StateTrackerObserver<T>
-where
-    T: State,
-{
-    pub unsafe fn from_raw(name: &'static str, tracker: &StateTracker<T>) -> Self {
+impl StateTrackersObserver {
+    pub unsafe fn from_raw(name: &'static str, trackers: &StateTrackers) -> Self {
         Self {
             name: Cow::Borrowed(name),
-            tracker: unsafe { OwnedPtr::from_raw(tracker) },
+            trackers: unsafe { OwnedPtr::from_raw(trackers) },
             hash: None,
         }
     }
 
-    pub fn get_state_tracker(&self) -> &StateTracker<T> {
-        self.tracker.as_ref()
+    pub fn get_state_tracker(&self) -> &StateTrackers {
+        self.trackers.as_ref()
     }
 }
 
-impl<T> Named for StateTrackerObserver<T>
-where
-    T: State,
-{
+impl Named for StateTrackersObserver {
     fn name(&self) -> &Cow<'static, str> {
         &self.name
     }
 }
 
-impl<T, I, S> Observer<I, S> for StateTrackerObserver<T>
-where
-    T: State,
-{
+impl<I, S> Observer<I, S> for StateTrackersObserver {
     fn pre_exec(&mut self, _state: &mut S, _input: &I) -> Result<(), Error> {
         self.hash = None;
         Ok(())
@@ -73,10 +60,7 @@ where
     }
 }
 
-impl<T> ObserverWithHashField for StateTrackerObserver<T>
-where
-    T: State,
-{
+impl ObserverWithHashField for StateTrackersObserver {
     fn hash(&self) -> Option<u64> {
         self.hash
     }
