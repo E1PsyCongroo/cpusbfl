@@ -2,17 +2,17 @@ use std::collections::HashSet;
 
 use libafl::prelude::*;
 
-use crate::reduce::*;
+use crate::reduce::{inst::*, *};
 use crate::state_tracker::*;
-
-const C_NOP: [u8; 2] = [0x01, 0x00];
 
 pub fn nop_unexecuted_insts(
     input: &[u8],
     original: &StateTrackers,
     reset_vector: u64,
 ) -> Option<(BytesInput, StateTrackers)> {
-    let executed = original.pc_tracker
+    println!("Nopping unexecuted instructions...");
+    let executed = original
+        .pc_tracker
         .iter()
         .map(|state| state.value)
         .collect::<HashSet<u64>>();
@@ -26,9 +26,10 @@ pub fn nop_unexecuted_insts(
         if executed.contains(&pc) {
             output.extend_from_slice(&input[offset..offset + inst_len]);
         } else {
-            output.extend_from_slice(&C_NOP);
-            if inst_len == 4 {
-                output.extend_from_slice(&C_NOP);
+            match inst_len {
+                2 => output.extend_from_slice(&C_NOP),
+                4 => output.extend_from_slice(&NOP),
+                _ => panic!("instruction length must be 2 or 4 bytes"),
             }
         }
 

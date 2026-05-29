@@ -37,8 +37,9 @@ fn try_jal_to_failure_site(
     let mut bytes = input.to_vec();
     let offset = pc_to_offset(&bytes, reset_vector, candidate_pc);
 
-    let jal = encode_jal_x0(candidate_pc, failure_pc)?;
-    bytes[offset..offset + 4].copy_from_slice(&jal);
+    let jmp = encode_jmp(candidate_pc, failure_pc, false, None)?;
+    assert!(jmp.len() == 4, "only support 4-byte jmp for now");
+    bytes[offset..offset + 4].copy_from_slice(&jmp);
     let max_inst = insts_to_failure_after_jal(&original.pc_tracker, candidate_pc);
 
     validate_exact_trace(BytesInput::from(bytes), original, max_inst)
@@ -49,6 +50,7 @@ pub fn strip_irrelevant_suffix(
     original: &StateTrackers,
     reset_vector: u64,
 ) -> Option<(BytesInput, StateTrackers)> {
+    println!("Stripping irrelevant suffix...");
     let pc_trace = &original.pc_tracker;
     assert!(pc_trace.len() > 0);
 
@@ -56,7 +58,9 @@ pub fn strip_irrelevant_suffix(
     let candidates: Vec<u64> = first_dynamic_pcs(pc_trace)
         .into_iter()
         .filter(|&pc| {
-            pc != failure_pc && pc + 2 != failure_pc && encode_jal_x0(pc, failure_pc).is_some()
+            pc != failure_pc
+                && pc + 2 != failure_pc
+                && encode_jmp(pc, failure_pc, false, None).is_some()
         })
         .collect();
 

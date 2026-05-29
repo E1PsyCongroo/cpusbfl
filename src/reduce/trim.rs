@@ -8,6 +8,7 @@ pub fn trim_after_max_pc(
     original: &StateTrackers,
     reset_vector: u64,
 ) -> Option<(BytesInput, StateTrackers)> {
+    println!("Trimming after max PC...");
     let max_pc = original
         .pc_tracker
         .iter()
