@@ -67,9 +67,29 @@ fn emit_top_passed_testcases(
             .sum::<f64>()
             / init_metadata.covers.names().len() as f64;
 
-        // let state_distance =
-        //     fastdtw_distance(&init_metadata.state_trackers, &metadata.state_trackers, 10)?;
-        let state_distance = 0f64;
+        let state_distance = fastdtw_distance(
+            &init_metadata
+                .state_trackers
+                .arch_int_reg_tracker
+                .iter()
+                .zip(init_metadata.state_trackers.csr_tracker.iter())
+                .map(|(arch, csr)| CoreState {
+                    arch_int_reg_state: arch.clone(),
+                    csr_state: csr.clone(),
+                })
+                .collect::<Vec<CoreState>>(),
+            &metadata
+                .state_trackers
+                .arch_int_reg_tracker
+                .iter()
+                .zip(metadata.state_trackers.csr_tracker.iter())
+                .map(|(arch, csr)| CoreState {
+                    arch_int_reg_state: arch.clone(),
+                    csr_state: csr.clone(),
+                })
+                .collect::<Vec<CoreState>>(),
+            10,
+        );
 
         println!(
             "cover_distance: {}, state_distance: {}",
@@ -117,7 +137,7 @@ fn emit_top_passed_testcases(
 
         if let Some(output_dir) = &corpus_output {
             let filename = format!("rank_{:04}_id_{}_dst_{:.6}", rank + 1, id, distance);
-            monitor::store_testcase(input, Some(metadata), output_dir, Some(filename));
+            monitor::store_testcase(input, Some(metadata), output_dir, Some(&filename));
         }
     }
 
@@ -207,6 +227,10 @@ pub(crate) fn run_fuzzer(
         return Err(Box::new(Error::illegal_argument(format!(
             "Initial case was not accepted into the main corpus by feedback"
         ))));
+    }
+
+    if let Some(output_dir) = &corpus_output {
+        store_testcase(init_case, Some(&init_metadata), output_dir, Some("init_case"));
     }
 
     let max_inst = init_metadata.state_trackers.len();

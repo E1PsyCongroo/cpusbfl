@@ -54,30 +54,34 @@ fn cal_suspicious(cover_name: &String, case_meta: &[CaseMetadata]) -> Vec<f64> {
 
 pub(crate) fn report_suspicious(case_meta: &[CaseMetadata], top_n: usize) -> () {
     let initial_case = case_meta.iter().find(|case| !case.is_passed).unwrap();
-
+    let mut suspicious: Vec<(String, usize, f64)> = Vec::new();
     for cover_name in cover_names() {
-        let suspicious = cal_suspicious(&cover_name, case_meta);
-        let mut indexed_suspicious: Vec<(usize, f64)> =
-            suspicious.into_iter().enumerate().collect();
-        indexed_suspicious.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-        println!("Suspiciousness of {cover_name} cover points:");
-        for (rank, (point, score)) in indexed_suspicious.iter().take(top_n).enumerate() {
-            assert!(
-                initial_case
-                    .covers
-                    .get(&cover_name)
-                    .covered_bits()
-                    .get(*point)
-                    .unwrap(),
-                "point {} not in initial case",
-                cover_point_name(&cover_name, *point),
-            );
-            println!(
-                "top-{}: Cover point {} with suspicious {:.6}",
-                rank + 1,
-                cover_point_name(&cover_name, *point),
-                score
-            );
-        }
+        suspicious.extend(
+            cal_suspicious(&cover_name, case_meta)
+                .into_iter()
+                .enumerate()
+                .map(|(i, score)| (cover_name.to_owned(), i, score))
+                .collect::<Vec<_>>(),
+        );
+    }
+    suspicious.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap());
+    println!("Suspiciousness of cover points:");
+    for (rank, (cover_name, point, score)) in suspicious.iter().take(top_n).enumerate() {
+        assert!(
+            initial_case
+                .covers
+                .get(&cover_name)
+                .covered_bits()
+                .get(*point)
+                .unwrap(),
+            "point {} not in initial case",
+            cover_point_name(&cover_name, *point),
+        );
+        println!(
+            "top-{}: C '{}' with suspicious {:.6}",
+            rank + 1,
+            cover_point_name(&cover_name, *point),
+            score
+        );
     }
 }

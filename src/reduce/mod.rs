@@ -74,7 +74,7 @@ pub(crate) fn reduce_fault_case(
                     &bytes,
                     None,
                     output_dir.unwrap(),
-                    Some("init_timmed".to_string()),
+                    Some("init_trimmed"),
                 );
             }
             bytes
@@ -91,7 +91,7 @@ pub(crate) fn reduce_fault_case(
                         &bytes,
                         None,
                         output_dir.unwrap(),
-                        Some("init_nopped".to_string()),
+                        Some("init_nopped"),
                     );
                 }
                 bytes
@@ -108,7 +108,7 @@ pub(crate) fn reduce_fault_case(
                         &bytes,
                         None,
                         output_dir.unwrap(),
-                        Some("init_striped_suffix".to_string()),
+                        Some("init_striped_suffix"),
                     );
                 }
                 (bytes, trackers)
@@ -116,25 +116,26 @@ pub(crate) fn reduce_fault_case(
             None => (nopped_bytes.to_owned(), original.to_owned()),
         };
 
-    let striped_prefix_bytes = match strip_irrelevant_prefix(
-        striped_suffix_bytes.mutator_bytes(),
-        &striped_suffix_trackers,
-        reset_vector,
-    ) {
-        Some((bytes, _)) => {
-            println!("Strip irrelevant prefix insts successed");
-            if save_reduce && output_dir.is_some() {
-                store_testcase(
-                    &bytes,
-                    None,
-                    output_dir.unwrap(),
-                    Some("init_striped_prefix".to_string()),
-                );
-            }
-            bytes
-        }
-        None => striped_suffix_bytes.to_owned(),
-    };
+    // let striped_prefix_bytes = match strip_irrelevant_prefix(
+    //     striped_suffix_bytes.mutator_bytes(),
+    //     &striped_suffix_trackers,
+    //     reset_vector,
+    // ) {
+    //     Some((bytes, _)) => {
+    //         println!("Strip irrelevant prefix insts successed");
+    //         if save_reduce && output_dir.is_some() {
+    //             store_testcase(
+    //                 &bytes,
+    //                 None,
+    //                 output_dir.unwrap(),
+    //                 Some("init_striped_prefix"),
+    //             );
+    //         }
+    //         bytes
+    //     }
+    //     None => striped_suffix_bytes.to_owned(),
+    // };
 
-    striped_prefix_bytes
+    // striped_prefix_bytes
+    striped_suffix_bytes
 }

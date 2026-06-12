@@ -23,6 +23,8 @@ struct Arguments {
     state: String,
     #[clap(default_value_t = false, short, long)]
     verbose: bool,
+    #[clap(default_value_t = false, short, long)]
+    reduce: bool,
     #[clap(default_value_t = 0x8000_0000, long)]
     reset_vector: u64,
     #[clap(default_value_t = 100, long)]
@@ -90,13 +92,17 @@ fn main() -> i32 {
         harness::sim_run_with_trackers(&input_case);
         let original_trakcers = state_tracker::trackers().clone();
 
-        let init_case = reduce::reduce_fault_case(
-            &input_case,
-            &original_trakcers,
-            args.reset_vector,
-            args.save_reduce,
-            &args.corpus_output,
-        );
+        let init_case = if args.reduce {
+            reduce::reduce_fault_case(
+                &input_case,
+                &original_trakcers,
+                args.reset_vector,
+                args.save_reduce,
+                &args.corpus_output,
+            )
+        } else {
+            input_case
+        };
 
         match fuzzer::run_fuzzer(
             args.max_iters,

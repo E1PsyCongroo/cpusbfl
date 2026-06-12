@@ -1,4 +1,4 @@
-use dtw_rs::{Solution, dtw, fastdtw};
+use dtw_rs::{Distance, Midpoint, Solution, fastdtw};
 use ndarray::ArrayView1;
 
 use crate::coverage::*;
@@ -22,17 +22,32 @@ where
     dist_sq.sqrt()
 }
 
-pub(crate) fn fastdtw_distance<T>(
-    a: &StateTracker<T>,
-    b: &StateTracker<T>,
-    radius: usize,
-) -> Result<f64, String>
-where
-    T: State,
-{
-    let solution = fastdtw(a.as_slice(), b.as_slice(), radius);
+#[repr(C)]
+#[derive(Copy, Clone, Default, Debug, Eq, PartialEq)]
+pub(crate) struct CoreState {
+    pub csr_state: CSRState,
+    pub arch_int_reg_state: ArchIntRegState,
+}
+
+impl Distance for CoreState {
+    type Output = f64;
+
+    fn distance(&self, other: &Self) -> Self::Output {
+        0.5 * (self.arch_int_reg_state.distance(&other.arch_int_reg_state)
+            + self.csr_state.distance(&other.csr_state))
+    }
+}
+
+impl Midpoint for CoreState {
+    fn midpoint(&self, _other: &Self) -> Self {
+        self.clone()
+    }
+}
+
+pub(crate) fn fastdtw_distance(a: &[CoreState], b: &[CoreState], radius: usize) -> f64 {
+    let solution = fastdtw(a, b, radius);
     let path_len = solution.path().len().max(1) as f64;
-    Ok(solution.distance() / path_len)
+    solution.distance() / path_len
 }
 
 pub(crate) fn distance_similarity(distance: f64) -> f64 {

@@ -78,6 +78,7 @@ impl Distance for ArchIntRegState {
             .zip(other.value.iter())
             .filter(|(a, b)| a != b)
             .count() as f64
+            / self.value.len() as f64
     }
 }
 
@@ -142,7 +143,6 @@ impl Distance for CSRState {
         let mut diff = 0u32;
         diff += (self.privilege_mode != other.privilege_mode) as u32;
         diff += (self.mstatus != other.mstatus) as u32;
-        diff += (self.sstatus != other.sstatus) as u32;
         diff += (self.mepc != other.mepc) as u32;
         diff += (self.sepc != other.sepc) as u32;
         diff += (self.mtval != other.mtval) as u32;
@@ -158,7 +158,7 @@ impl Distance for CSRState {
         diff += (self.sscratch != other.sscratch) as u32;
         diff += (self.mideleg != other.mideleg) as u32;
         diff += (self.medeleg != other.medeleg) as u32;
-        diff as f64
+        (diff as f64) / 17.0
     }
 }
 

@@ -51,12 +51,12 @@ pub fn store_testcase(
     input: &BytesInput,
     metadata: Option<&CaseMetadata>,
     output_dir: &str,
-    name: Option<String>,
+    name: Option<&str>,
 ) {
     fs::create_dir_all(&output_dir).expect("Unable to create the output directory");
 
     let filename = if name.is_some() {
-        name.unwrap()
+        name.unwrap().to_string()
     } else {
         let mut context = md5::Context::new();
         context.consume(input.mutator_bytes());
