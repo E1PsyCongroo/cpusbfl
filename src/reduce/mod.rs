@@ -70,12 +70,7 @@ pub(crate) fn reduce_fault_case(
         Some((bytes, _)) => {
             println!("Trim case after max pc successed");
             if save_reduce && output_dir.is_some() {
-                store_testcase(
-                    &bytes,
-                    None,
-                    output_dir.unwrap(),
-                    Some("init_trimmed"),
-                );
+                store_testcase(&bytes, None, output_dir.unwrap(), Some("init_trimmed"));
             }
             bytes
         }
@@ -87,12 +82,7 @@ pub(crate) fn reduce_fault_case(
             Some((bytes, _)) => {
                 println!("Nop unexecuted insts successed");
                 if save_reduce && output_dir.is_some() {
-                    store_testcase(
-                        &bytes,
-                        None,
-                        output_dir.unwrap(),
-                        Some("init_nopped"),
-                    );
+                    store_testcase(&bytes, None, output_dir.unwrap(), Some("init_nopped"));
                 }
                 bytes
             }

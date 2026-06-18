@@ -1,72 +1,60 @@
-use crate::{coverage::*, fuzzer::CaseMetadata};
+use std::path::{Path, PathBuf};
 
-fn cal_suspicious(cover_name: &String, case_meta: &[CaseMetadata]) -> Vec<f64> {
-    let len = cover_len(cover_name);
-    assert!(
-        case_meta
-            .iter()
-            .all(|case_cov| case_cov.covers.get(cover_name).len() == len)
-    );
+use crate::block::{dfb::*, mgr::*, *};
+use crate::coverage::*;
+use crate::fuzzer::*;
+use crate::spectrum::matrix::*;
 
-    let mut e_p = vec![0usize; len];
-    let mut e_f = vec![0usize; len];
-    let mut n_p = vec![0usize; len];
-    let mut n_f = vec![0usize; len];
-
-    for case in case_meta {
-        for (i, covered) in case
-            .covers
-            .get(cover_name)
-            .covered_bits()
-            .into_iter()
-            .enumerate()
-        {
-            if case.is_passed {
-                if covered {
-                    e_p[i] += 1;
-                } else {
-                    n_p[i] += 1;
-                }
-            } else {
-                if covered {
-                    e_f[i] += 1;
-                } else {
-                    n_f[i] += 1;
-                }
-            }
+pub(crate) fn report_result(
+    case_metas: &[CaseMetadata],
+    top_sus: u64,
+    rtl_dir: Option<String>,
+    include_dir: Option<Vec<String>>,
+    top_module: Option<String>,
+    top_scope: Option<String>,
+    metric: SpectrumMetric,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let rtl_info = match (rtl_dir, include_dir, top_module, top_scope) {
+        (Some(rtl_dir), Some(include_dir), Some(top_module), Some(top_scope)) => {
+            Some((rtl_dir, include_dir, top_module, top_scope))
         }
-    }
+        (None, None, None, None) => None,
+        _ => panic!("rtl_dir, include_dir, top_module and top_scope must be all Some or all None"),
+    };
 
-    (0..len)
-        .map(|i| {
-            let ep = e_p[i] as f64;
-            let ef = e_f[i] as f64;
-            let nf = n_f[i] as f64;
-
-            if ef == 0.0 {
-                0.0
-            } else {
-                ef / ((ef + nf) * (ef + ep)).sqrt()
-            }
-        })
-        .collect()
-}
-
-pub(crate) fn report_suspicious(case_meta: &[CaseMetadata], top_n: usize) -> () {
-    let initial_case = case_meta.iter().find(|case| !case.is_passed).unwrap();
-    let mut suspicious: Vec<(String, usize, f64)> = Vec::new();
-    for cover_name in cover_names() {
-        suspicious.extend(
-            cal_suspicious(&cover_name, case_meta)
+    let mut ranked_points = cover_names()
+        .into_iter()
+        .flat_map(|cover_name| {
+            calculate_suspiciousness(&cover_name, case_metas, metric)
                 .into_iter()
                 .enumerate()
-                .map(|(i, score)| (cover_name.to_owned(), i, score))
-                .collect::<Vec<_>>(),
-        );
+                .map(move |(idx, sus)| (cover_name.clone(), idx, sus))
+        })
+        .collect::<Vec<(String, usize, f64)>>();
+    ranked_points.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap());
+
+    if let Some((rtl_dir, include_dir, top_module, top_scope)) = rtl_info {
+        let rtl_files = get_module_files(&rtl_dir);
+        let includes = include_dir.iter().map(PathBuf::from).collect::<Vec<_>>();
+        let block_mgr = BlockManager::new(&rtl_files, &includes, &top_module, &top_scope);
+        block_mgr.dump_blocks_distribution("test")?;
+        let all_blocks = block_mgr.get_all_blocks();
+        let sbfl_blocks: Vec<_> = all_blocks
+            .iter()
+            .filter(|b| {
+                !matches!(
+                    b.block_type(),
+                    BlockType::ModuleInput | BlockType::ModuleOutput
+                )
+            })
+            .collect();
     }
-    suspicious.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap());
+
+    let initial_case = case_metas.iter().find(|case| !case.is_passed).unwrap();
     println!("Suspiciousness of cover points:");
-    for (rank, (cover_name, point, score)) in suspicious.iter().take(top_n).enumerate() {
+    for (rank, (cover_name, point, score)) in
+        ranked_points.iter().take(top_sus as usize).enumerate()
+    {
         assert!(
             initial_case
                 .covers
@@ -84,4 +72,26 @@ pub(crate) fn report_suspicious(case_meta: &[CaseMetadata], top_n: usize) -> () 
             score
         );
     }
+
+    Ok(())
+}
+
+fn get_module_files<P: AsRef<Path>>(path: P) -> Vec<std::path::PathBuf> {
+    let path = path.as_ref();
+    let mut files = Vec::new();
+    if path.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(path) {
+            for entry in entries.filter_map(Result::ok) {
+                let p = entry.path();
+                if p.is_file() {
+                    if let Some(ext) = p.extension() {
+                        if ext == "sv" || ext == "v" {
+                            files.push(p);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    files
 }

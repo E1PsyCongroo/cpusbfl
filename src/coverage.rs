@@ -57,10 +57,10 @@ impl<T> Coverage<T>
 where
     T: CoveragePoint,
 {
-    pub fn new(name: &str, n_cover: usize) -> Self {
+    pub fn new(name: &str) -> Self {
         Self {
             name: name.to_string(),
-            point_counts: vec![T::default(); n_cover],
+            point_counts: Vec::new(),
         }
     }
 
@@ -71,6 +71,12 @@ where
     pub fn update(&mut self) {
         unsafe {
             set_cover_feedback(&self.name);
+            let cover_num = get_cover_number();
+            if self.point_counts.is_empty() {
+                self.point_counts.resize(cover_num as usize, T::default());
+            } else {
+                assert_eq!(self.point_counts.len(), cover_num as usize);
+            }
             update_stats_cover(self.point_counts.as_mut_ptr() as *mut c_void);
         }
     }
@@ -124,11 +130,11 @@ pub(crate) enum AnyCoverage {
 }
 
 impl AnyCoverage {
-    pub fn new(kind: CoverageKind, name: &str, n_cover: usize) -> Self {
+    pub fn new(kind: CoverageKind, name: &str) -> Self {
         match kind {
-            CoverageKind::Bool => Self::Bool(Coverage::<bool>::new(name, n_cover)),
-            CoverageKind::U8 => Self::U8(Coverage::<u8>::new(name, n_cover)),
-            CoverageKind::U64 => Self::U64(Coverage::<u64>::new(name, n_cover)),
+            CoverageKind::Bool => Self::Bool(Coverage::<bool>::new(name)),
+            CoverageKind::U8 => Self::U8(Coverage::<u8>::new(name)),
+            CoverageKind::U64 => Self::U64(Coverage::<u64>::new(name)),
         }
     }
 
@@ -187,7 +193,6 @@ impl Coverages {
         for cover_name in cover_names {
             unsafe { set_cover_feedback(&cover_name) };
             let data_size = unsafe { get_cover_data_size() };
-            let n_cover = unsafe { get_cover_number() as usize };
             covers.insert(
                 cover_name.clone(),
                 AnyCoverage::new(
@@ -197,7 +202,6 @@ impl Coverages {
                         CoverageKind::U8
                     },
                     cover_name,
-                    n_cover,
                 ),
             );
         }
@@ -262,13 +266,10 @@ struct AccumulatedCoverages {
 
 impl AccumulatedCoverages {
     fn new(cover_names: &[String]) -> Self {
-        let mut covers = HashMap::new();
-
-        for cover_name in cover_names {
-            unsafe { set_cover_feedback(cover_name) };
-            let n_cover = unsafe { get_cover_number() as usize };
-            covers.insert(cover_name.clone(), vec![false; n_cover]);
-        }
+        let mut covers = cover_names
+            .iter()
+            .map(|cover_name| (cover_name.clone(), Vec::new()))
+            .collect::<HashMap<String, Vec<bool>>>();
 
         Self { covers }
     }
@@ -347,18 +348,6 @@ pub(crate) fn cover_point_name(cover_name: &str, i: usize) -> String {
     }
 }
 
-pub(crate) fn cover_accumulate(cover_name: &str) {
-    let cov_guard = coverages();
-    let cov = cov_guard.get(cover_name);
-    let mut accumulated_cov_guard = accumulated_coverages();
-    let accumulated_cov = accumulated_cov_guard.get_mut(cover_name);
-    for (i, covered) in cov.covered_bits().into_iter().enumerate() {
-        if covered {
-            accumulated_cov[i] = true
-        }
-    }
-}
-
 pub(crate) fn cover_display(cover_name: &str) {
     println!(
         "{} Accumulative Coverage:       {:.3}%",
@@ -368,15 +357,27 @@ pub(crate) fn cover_display(cover_name: &str) {
 }
 
 pub(crate) fn all_cover_update() {
-    let mut guard = coverages();
-    for cover_name in guard.names() {
-        guard.update(&cover_name);
-    }
-}
+    let mut cov_guard = coverages();
+    let mut accumulated_cov_guard = accumulated_coverages();
+    for cover_name in cov_guard.names() {
+        cov_guard.update(&cover_name);
 
-pub(crate) fn all_cover_accumulate() {
-    for cover_name in cover_names() {
-        cover_accumulate(&cover_name);
+        let cov = cov_guard.get(&cover_name);
+        let accumulated_cov = accumulated_cov_guard.get_mut(&cover_name);
+        let cover_num = unsafe {
+            set_cover_feedback(&cover_name);
+            get_cover_number()
+        };
+        if accumulated_cov.is_empty() {
+            accumulated_cov.resize(cover_num as usize, false);
+        } else {
+            assert_eq!(accumulated_cov.len(), cover_num as usize);
+        }
+        for (i, covered) in cov.covered_bits().into_iter().enumerate() {
+            if covered {
+                accumulated_cov[i] = true
+            }
+        }
     }
 }
 

@@ -27,11 +27,11 @@ fn emit_top_passed_testcases(
         InMemoryCorpus<ValueInput<Vec<u8>>>,
         ValueInput<Vec<u8>>,
         StdRand,
-        OnDiskCorpus<ValueInput<Vec<u8>>>,
+        InMemoryCorpus<ValueInput<Vec<u8>>>,
     >,
     init_metadata: CaseMetadata,
     top_n: u64,
-    corpus_output: &Option<String>,
+    output: &Option<String>,
 ) -> Result<Vec<CaseMetadata>, Box<dyn std::error::Error>> {
     let corpus = state.corpus();
     let mut passed_cases = Vec::new();
@@ -135,7 +135,7 @@ fn emit_top_passed_testcases(
             distance
         );
 
-        if let Some(output_dir) = &corpus_output {
+        if let Some(output_dir) = &output {
             let filename = format!("rank_{:04}_id_{}_dst_{:.6}", rank + 1, id, distance);
             monitor::store_testcase(input, Some(metadata), output_dir, Some(&filename));
         }
@@ -153,9 +153,8 @@ pub(crate) fn run_fuzzer(
     max_iters: u64,
     max_run_timeout: u64,
     top_n: u64,
-    reset_vector: u64,
     init_case: &BytesInput,
-    corpus_output: &Option<String>,
+    output: &Option<String>,
 ) -> Result<Vec<CaseMetadata>, Box<dyn std::error::Error>> {
     // Scheduler, Feedback, Objective
     let scheduler = QueueScheduler::new();
@@ -177,7 +176,8 @@ pub(crate) fn run_fuzzer(
     let mut state = StdState::new(
         StdRand::with_seed(current_nanos()),
         InMemoryCorpus::new(),
-        OnDiskCorpus::new(PathBuf::from("./crashes")).unwrap(),
+        InMemoryCorpus::new(),
+        // OnDiskCorpus::new(PathBuf::from("./crashes")).unwrap(),
         &mut feedback,
         &mut objective,
     )
@@ -229,8 +229,13 @@ pub(crate) fn run_fuzzer(
         ))));
     }
 
-    if let Some(output_dir) = &corpus_output {
-        store_testcase(init_case, Some(&init_metadata), output_dir, Some("init_case"));
+    if let Some(output_dir) = &output {
+        store_testcase(
+            init_case,
+            Some(&init_metadata),
+            output_dir,
+            Some("init_case"),
+        );
     }
 
     let max_inst = init_metadata.state_trackers.len();
@@ -246,11 +251,13 @@ pub(crate) fn run_fuzzer(
         .unwrap()
         .lock()
         .expect("poisoned mutex")
-        .push(format!("-I {max_inst}"));
+        .extend(vec!["-I".to_string(), max_inst.to_string()].into_iter());
 
     // Fuzzing Loop
-    let mutator =
-        StdScheduledMutator::new(tuple_list!(LastInstMutator::new(reset_vector, last_pc)?));
+    let mutator = StdScheduledMutator::new(tuple_list!(LastInstMutator::new(
+        init_case.mutator_bytes(),
+        last_pc
+    )?));
     let mut stages = tuple_list!(StdMutationalStage::new(mutator));
 
     fuzzer.fuzz_loop_for(&mut stages, &mut executor, &mut state, &mut mgr, max_iters)?;
@@ -272,5 +279,5 @@ pub(crate) fn run_fuzzer(
     //     }
     // }
 
-    emit_top_passed_testcases(&state, init_metadata, top_n, corpus_output)
+    emit_top_passed_testcases(&state, init_metadata, top_n, output)
 }

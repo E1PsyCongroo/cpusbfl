@@ -1,5 +1,7 @@
+mod block;
 mod bugloc;
 mod coverage;
+mod elf;
 mod feedback;
 mod fuzzer;
 mod harness;
@@ -8,6 +10,7 @@ mod mutator;
 mod observer;
 mod reduce;
 mod similarity;
+mod spectrum;
 mod state_tracker;
 
 use clap::Parser;
@@ -22,27 +25,34 @@ struct Arguments {
     #[clap(default_value_t = String::from("PCState,ArchIntRegState,CSRState"), short, long)]
     state: String,
     #[clap(default_value_t = false, short, long)]
-    verbose: bool,
-    #[clap(default_value_t = false, short, long)]
     reduce: bool,
-    #[clap(default_value_t = 0x8000_0000, long)]
-    reset_vector: u64,
     #[clap(default_value_t = 100, long)]
     max_iters: u64,
     #[clap(default_value_t = 10, long)]
     max_run_timeout: u64,
+    #[clap(default_value_t = String::from("./corpus"), long)]
+    corpus_input: String,
+    #[clap(long)]
+    output: Option<String>,
+    #[clap(default_value_t = false, long)]
+    save_reduce: bool,
+    // SBFL options
     #[clap(default_value_t = 10, long)]
     top_pass: u64,
     #[clap(default_value_t = 10, long)]
     top_sus: u64,
-    #[clap(default_value_t = String::from("./corpus"), long)]
-    corpus_input: String,
     #[clap(long)]
-    corpus_output: Option<String>,
-    #[clap(default_value_t = false, long)]
-    save_errors: bool,
-    #[clap(default_value_t = false, long)]
-    save_reduce: bool,
+    rtl_dir: Option<String>,
+    #[clap(long)]
+    include_dir: Option<Vec<String>>,
+    #[clap(long)]
+    top_module: Option<String>,
+    #[clap(long)]
+    top_scope: Option<String>,
+    #[clap(default_value_t = spectrum::matrix::SpectrumMetric::Ochiai, long, value_enum)]
+    metric: spectrum::matrix::SpectrumMetric,
+    #[arg(long)]
+    ground_truth: Option<String>,
     // Run options
     #[clap(default_value_t = 1, long)]
     repeat: usize,
@@ -71,54 +81,60 @@ fn main() -> i32 {
         }
     }
 
-    harness::set_sim_env(args.coverage, args.state, args.verbose, emu_args);
+    harness::set_sim_env(args.coverage, args.state, emu_args);
 
     let mut has_failed = 0;
     if workloads.len() > 0 {
         for _ in 0..args.repeat {
-            let ret = harness::sim_run_multiple(&workloads, args.auto_exit);
+            let ret = harness::sim_run_multiple(&workloads, true, false, args.auto_exit);
             if ret != 0 {
                 has_failed = 1;
                 if args.auto_exit {
                     return ret;
                 }
             }
+            coverage::all_cover_display();
         }
-        coverage::all_cover_display();
     }
 
     if args.fuzzing {
         let input_case = harness::load_initial_case(&args.corpus_input);
-        harness::sim_run_with_trackers(&input_case);
-        let original_trakcers = state_tracker::trackers().clone();
+        // harness::sim_run_with_trackers(&input_case);
+        // let original_trakcers = state_tracker::trackers().clone();
 
-        let init_case = if args.reduce {
-            reduce::reduce_fault_case(
-                &input_case,
-                &original_trakcers,
-                args.reset_vector,
-                args.save_reduce,
-                &args.corpus_output,
-            )
-        } else {
-            input_case
-        };
+        let init_case = input_case;
+        // let init_case = if args.reduce {
+        //     reduce::reduce_fault_case(
+        //         &input_case,
+        //         &original_trakcers,
+        //         args.reset_vector,
+        //         args.save_reduce,
+        //         &args.corpus_output,
+        //     )
+        // } else {
+        //     input_case
+        // };
 
-        match fuzzer::run_fuzzer(
+        if let Err(e) = fuzzer::run_fuzzer(
             args.max_iters,
             args.max_run_timeout,
             args.top_pass,
-            args.reset_vector,
             &init_case,
-            &args.corpus_output,
-        ) {
-            Ok(passed_cov) => {
-                bugloc::report_suspicious(&passed_cov, args.top_sus as usize);
-            }
-            Err(e) => {
-                eprintln!("{e}");
-                has_failed = 1;
-            }
+            &args.output,
+        )
+        .and_then(|passed_cov| {
+            bugloc::report_result(
+                &passed_cov,
+                args.top_sus,
+                args.rtl_dir,
+                args.include_dir,
+                args.top_module,
+                args.top_scope,
+                args.metric,
+            )
+        }) {
+            eprintln!("{e}");
+            has_failed = 1;
         }
     }
 
