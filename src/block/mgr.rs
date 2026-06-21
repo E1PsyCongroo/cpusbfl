@@ -1,10 +1,11 @@
+use std::{
+    collections::{HashMap, VecDeque},
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
-use std::collections::{HashMap, VecDeque};
-use std::path::Path;
-use std::sync::Arc;
-
-use sv_parser::{Define, NodeEvent, RefNode, SyntaxTree, parse_sv, unwrap_node};
 use serde::Serialize;
+use sv_parser::{Define, NodeEvent, RefNode, SyntaxTree, parse_sv, unwrap_node};
 
 use crate::block::{Block, DataFlowBlock, dfb};
 
@@ -15,7 +16,7 @@ pub struct BlockManager {
 impl BlockManager {
     pub fn new<P: AsRef<Path>>(
         rtl_files: &[P],
-        includes: &[std::path::PathBuf],
+        includes: &[PathBuf],
         top_module: &str,
         top_scope: &str,
     ) -> Self {
@@ -27,11 +28,16 @@ impl BlockManager {
         for file in rtl_files {
             let file = file.as_ref();
             let path_str = file.to_str().unwrap_or("");
-            if let Ok((tree, _)) = parse_sv(path_str, &defines, includes, false, false) {
-                let mname = get_module_name(&tree).unwrap_or_else(|| "unknown".to_string());
-                let code = std::fs::read_to_string(file).unwrap_or_default();
-                module_code_map.insert(mname.clone(), code);
-                module_tree_map.insert(mname, Arc::new(tree));
+            match parse_sv(path_str, &defines, includes, false, false) {
+                Ok((tree, _)) => {
+                    let mname = get_module_name(&tree).unwrap_or_else(|| "unknown".to_string());
+                    let code = std::fs::read_to_string(file).unwrap_or_default();
+                    module_code_map.insert(mname.clone(), code);
+                    module_tree_map.insert(mname, Arc::new(tree));
+                }
+                Err(e) => {
+                    log::warn!("[parse failed] {}: {:?}", file.display(), e);
+                }
             }
         }
 

@@ -267,7 +267,7 @@ pub fn strip_irrelevant_prefix(
     original: &StateTrackers,
     reset_vector: u64,
 ) -> Option<(BytesInput, StateTrackers)> {
-    println!("Stripping irrelevant prefix...");
+    log::info!("Stripping irrelevant prefix...");
     let pc_trace = &original.pc_tracker;
     assert!(pc_trace.len() > 0);
 

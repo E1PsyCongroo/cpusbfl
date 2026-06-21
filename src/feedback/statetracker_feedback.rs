@@ -123,9 +123,9 @@ where
         self.inner
             .append_metadata(state, manager, observers, testcase)?;
 
-        println!("[Debug] Appending state tracker metadata:");
-        println!(
-            "[Debug] State tracker has {} states: {:?}",
+        log::debug!("Appending state tracker metadata:");
+        log::debug!(
+            "State tracker has {} states: {:?}",
             self.pending.as_ref().unwrap().tracker.len(),
             self.pending.as_ref().unwrap().tracker
         );

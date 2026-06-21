@@ -349,7 +349,7 @@ pub(crate) fn cover_point_name(cover_name: &str, i: usize) -> String {
 }
 
 pub(crate) fn cover_display(cover_name: &str) {
-    println!(
+    log::info!(
         "{} Accumulative Coverage:       {:.3}%",
         cover_name,
         get_accumulative_coverage(cover_name)

@@ -68,7 +68,7 @@ pub(crate) fn reduce_fault_case(
 
     let trimmed_bytes = match trim_after_max_pc(input.mutator_bytes(), &original, reset_vector) {
         Some((bytes, _)) => {
-            println!("Trim case after max pc successed");
+            log::info!("Trim case after max pc successed");
             if save_reduce && output_dir.is_some() {
                 store_testcase(&bytes, None, output_dir.unwrap(), Some("init_trimmed"));
             }
@@ -80,7 +80,7 @@ pub(crate) fn reduce_fault_case(
     let nopped_bytes =
         match nop_unexecuted_insts(trimmed_bytes.mutator_bytes(), &original, reset_vector) {
             Some((bytes, _)) => {
-                println!("Nop unexecuted insts successed");
+                log::info!("Nop unexecuted insts successed");
                 if save_reduce && output_dir.is_some() {
                     store_testcase(&bytes, None, output_dir.unwrap(), Some("init_nopped"));
                 }
@@ -92,7 +92,7 @@ pub(crate) fn reduce_fault_case(
     let (striped_suffix_bytes, striped_suffix_trackers) =
         match strip_irrelevant_suffix(nopped_bytes.mutator_bytes(), original, reset_vector) {
             Some((bytes, trackers)) => {
-                println!("Strip irrelevant suffix insts successed");
+                log::info!("Strip irrelevant suffix insts successed");
                 if save_reduce && output_dir.is_some() {
                     store_testcase(
                         &bytes,
@@ -112,7 +112,7 @@ pub(crate) fn reduce_fault_case(
     //     reset_vector,
     // ) {
     //     Some((bytes, _)) => {
-    //         println!("Strip irrelevant prefix insts successed");
+    //         log::info!("Strip irrelevant prefix insts successed");
     //         if save_reduce && output_dir.is_some() {
     //             store_testcase(
     //                 &bytes,

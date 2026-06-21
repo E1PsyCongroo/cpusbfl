@@ -10,7 +10,7 @@ pub fn nop_unexecuted_insts(
     original: &StateTrackers,
     reset_vector: u64,
 ) -> Option<(BytesInput, StateTrackers)> {
-    println!("Nopping unexecuted instructions...");
+    log::info!("Nopping unexecuted instructions...");
     let executed = original
         .pc_tracker
         .iter()

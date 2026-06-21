@@ -91,7 +91,7 @@ fn emit_top_passed_testcases(
             10,
         );
 
-        println!(
+        log::info!(
             "cover_distance: {}, state_distance: {}",
             cover_distance, state_distance
         );
@@ -101,9 +101,7 @@ fn emit_top_passed_testcases(
         let input = testcase
             .input()
             .as_ref()
-            .ok_or(Error::illegal_state(format!(
-                "Corpus testcase {id} has no input"
-            )))?;
+            .ok_or(format!("Corpus testcase {id} has no input"))?;
 
         passed_cases.push((usize::from(id), input.clone(), metadata, distance));
     }
@@ -115,7 +113,7 @@ fn emit_top_passed_testcases(
     });
 
     let limit = usize::min(top_n as usize, passed_cases.len());
-    println!(
+    log::info!(
         "Found {} passed testcases with unique coverage, selecting top {}.",
         passed_cases.len(),
         limit
@@ -128,7 +126,7 @@ fn emit_top_passed_testcases(
 
     let top_passed_cases: Vec<_> = passed_cases.into_iter().take(limit).collect();
     for (rank, (id, input, metadata, distance)) in top_passed_cases.iter().enumerate() {
-        println!(
+        log::info!(
             "Top {} passed testcase: corpus_id={}, distance={:.6}",
             rank + 1,
             id,
@@ -183,7 +181,7 @@ pub(crate) fn run_fuzzer(
     )
     .unwrap();
     let monitor = SimpleMonitor::new(|s| {
-        println!("{}", s);
+        log::info!("{s}");
     });
     let mut mgr = SimpleEventManager::new(monitor);
 
@@ -210,9 +208,7 @@ pub(crate) fn run_fuzzer(
 
         let init_passed = init_testcase.metadata::<PassedMetadata>()?.is_passed;
         if init_passed {
-            return Err(Box::new(Error::illegal_argument(format!(
-                "Initial case did not crash"
-            ))));
+            return Err("Initial case did not crash".into());
         }
 
         let init_cover = init_testcase.metadata::<CoveragesMetadata>()?;
@@ -224,9 +220,7 @@ pub(crate) fn run_fuzzer(
             is_passed: init_passed,
         };
     } else {
-        return Err(Box::new(Error::illegal_argument(format!(
-            "Initial case was not accepted into the main corpus by feedback"
-        ))));
+        return Err("Initial case was not accepted into the main corpus by feedback".into());
     }
 
     if let Some(output_dir) = &output {
@@ -262,22 +256,22 @@ pub(crate) fn run_fuzzer(
 
     fuzzer.fuzz_loop_for(&mut stages, &mut executor, &mut state, &mut mgr, max_iters)?;
 
-    // for cover_name in cover_names() {
-    //     println!("init_case cover points of {cover_name}:");
-    //     for (point, count) in init_metadata
-    //         .covers
-    //         .get(&cover_name)
-    //         .covered_counts()
-    //         .into_iter()
-    //         .enumerate()
-    //     {
-    //         println!(
-    //             "cover point: \"{}\"({})",
-    //             cover_point_name(&cover_name, point),
-    //             count
-    //         );
-    //     }
-    // }
+    for cover_name in cover_names() {
+        log::trace!("init_case cover points of {cover_name}:");
+        for (point, count) in init_metadata
+            .covers
+            .get(&cover_name)
+            .covered_counts()
+            .into_iter()
+            .enumerate()
+        {
+            log::trace!(
+                "cover point: \"{}\"({})",
+                cover_point_name(&cover_name, point),
+                count
+            );
+        }
+    }
 
     emit_top_passed_testcases(&state, init_metadata, top_n, output)
 }

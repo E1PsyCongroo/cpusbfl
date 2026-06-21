@@ -103,7 +103,7 @@ pub fn strip_irrelevant_suffix(
     original: &StateTrackers,
     reset_vector: u64,
 ) -> Option<(BytesInput, StateTrackers)> {
-    println!("Stripping irrelevant suffix...");
+    log::info!("Stripping irrelevant suffix...");
     let pc_trace = &original.pc_tracker;
     assert!(pc_trace.len() > 0);
 

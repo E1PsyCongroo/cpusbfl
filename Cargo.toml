@@ -23,6 +23,8 @@ tempfile = "3"
 goblin = "0.10"
 riscv-codec = "0.4.0"
 sv-parser = "0.13.5"
+log = "0.4.33"
+env_logger = "0.11.10"
 
 [lib]
 name = "cpusbfl"

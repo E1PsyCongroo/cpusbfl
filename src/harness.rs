@@ -105,7 +105,7 @@ pub(crate) fn sim_run_multiple(
     for workload in workloads.iter() {
         ret = sim_run(workload, update_cover, update_tracker);
         if ret != 0 {
-            println!("{} exits abnormally with return code: {}", workload, ret);
+            log::info!("{} exits abnormally with return code: {}", workload, ret);
             if auto_exit {
                 break;
             }

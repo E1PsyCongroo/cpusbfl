@@ -42,9 +42,9 @@ struct Arguments {
     #[clap(default_value_t = 10, long)]
     top_sus: u64,
     #[clap(long)]
-    rtl_dir: Option<String>,
-    #[clap(long)]
-    include_dir: Option<Vec<String>>,
+    rtl_path: Option<String>,
+    #[clap(long, value_delimiter = ',')]
+    include_paths: Option<Vec<String>>,
     #[clap(long)]
     top_module: Option<String>,
     #[clap(long)]
@@ -63,6 +63,8 @@ struct Arguments {
 
 #[unsafe(no_mangle)]
 fn main() -> i32 {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+
     let args = Arguments::parse();
 
     let mut workloads: Vec<String> = Vec::new();
@@ -124,16 +126,17 @@ fn main() -> i32 {
         )
         .and_then(|passed_cov| {
             bugloc::report_result(
-                &passed_cov,
                 args.top_sus,
-                args.rtl_dir,
-                args.include_dir,
-                args.top_module,
-                args.top_scope,
                 args.metric,
+                &passed_cov,
+                &args.rtl_path,
+                &args.include_paths,
+                &args.top_module,
+                &args.top_scope,
+                &args.output,
             )
         }) {
-            eprintln!("{e}");
+            log::error!("{e}");
             has_failed = 1;
         }
     }
