@@ -64,7 +64,7 @@ pub fn store_testcase(
     };
 
     input
-        .to_file(PathBuf::from(format!("{output_dir}/{filename}.bin")).as_path())
+        .to_file(PathBuf::from(format!("{output_dir}/{filename}.elf")).as_path())
         .expect(format!("written {filename} failed").as_str());
 
     if let Some(metadata) = metadata {
