@@ -94,16 +94,17 @@ pub(crate) fn report_result(
 
         let mut seen = HashSet::new();
 
-        ranked_blocks.retain(|(bid, _score)| seen.insert(*bid));
+        ranked_blocks.retain(|(scope, bid, _score)| seen.insert((scope.clone(), *bid)));
 
         info_and_writeln(&mut result_fs, format_args!("Suspiciousness of block:"))?;
 
-        for (rank, &(bid, score)) in ranked_blocks.iter().take(top_sus as usize).enumerate() {
+        for (rank, (scope, bid, score)) in ranked_blocks.iter().take(top_sus as usize).enumerate() {
             info_and_writeln(
                 &mut result_fs,
                 format_args!(
-                    "top-{}: Block(bid: {}) with suspicious '{:.6}'",
+                    "top-{}: Block(scope: {}, bid: {}) with suspicious '{:.6}'",
                     rank + 1,
+                    scope,
                     bid,
                     score,
                 ),
@@ -164,7 +165,7 @@ fn sus_point2block(
     top_module: &String,
     top_scope: &String,
     output: &Option<String>,
-) -> Result<Vec<(u64, f64)>, Box<dyn std::error::Error>> {
+) -> Result<Vec<(String, u64, f64)>, Box<dyn std::error::Error>> {
     let rtl_files = get_module_files(&rtl_path);
     let includes = include_paths.iter().map(PathBuf::from).collect::<Vec<_>>();
     let block_mgr = BlockManager::new(&rtl_files, &includes, &top_module, &top_scope);
@@ -183,7 +184,7 @@ fn sus_point2block(
         block_mgr.dump_blocks_distribution(&output)?;
     }
 
-    let mut sus_blocks: Vec<(u64, f64)> = Vec::new();
+    let mut sus_blocks: Vec<(String, u64, f64)> = Vec::new();
 
     for (cover_name, point, score) in sus_points.iter() {
         let point_name = cover_point_name(cover_name, *point);
@@ -193,7 +194,7 @@ fn sus_point2block(
             .find(|block| block.scope() == hier && block.line_ranges().contains(&lineno))
         {
             None => log::warn!("convert Point'{point_name}' to Block failed"),
-            Some(block) => sus_blocks.push((block.bid(), *score)),
+            Some(block) => sus_blocks.push((block.scope().to_string(), block.bid(), *score)),
         }
     }
 
