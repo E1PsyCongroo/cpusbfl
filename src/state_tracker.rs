@@ -1,7 +1,7 @@
 use std::{
     cmp::max,
     ffi::{CString, c_void},
-    fmt::Debug,
+    fmt::{self, Debug, Display, Formatter},
     hash::{Hash, Hasher},
     panic,
     sync::{Mutex, OnceLock},
@@ -17,6 +17,7 @@ pub(crate) trait State:
     + Clone
     + Default
     + Debug
+    + Display
     + Hash
     + Eq
     + PartialEq
@@ -28,9 +29,21 @@ pub(crate) trait State:
 {
 }
 
-#[derive(Copy, Clone, Default, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Copy, Clone, Default, Eq, PartialEq, Deserialize, Serialize)]
 pub struct PCState {
     pub value: u64,
+}
+
+impl Display for PCState {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        writeln!(f, "pc: 0x{:016x}", self.value)
+    }
+}
+
+impl Debug for PCState {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        Display::fmt(self, f)
+    }
 }
 
 impl State for PCState {}
@@ -56,9 +69,36 @@ impl Midpoint for PCState {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Default, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Copy, Clone, Default, Eq, PartialEq, Deserialize, Serialize)]
 pub struct ArchIntRegState {
     pub value: [u64; 32],
+}
+
+impl Display for ArchIntRegState {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        writeln!(f, "regs:")?;
+
+        let mut has_printed = false;
+
+        for (idx, value) in self.value.iter().enumerate() {
+            if f.alternate() || *value != 0 {
+                has_printed = true;
+                writeln!(f, "  x{:<2} = 0x{:016x}", idx, value)?;
+            }
+        }
+
+        if !has_printed {
+            writeln!(f, "  <all zero>")?;
+        }
+
+        Ok(())
+    }
+}
+
+impl Debug for ArchIntRegState {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        Display::fmt(self, f)
+    }
 }
 
 impl State for ArchIntRegState {}
@@ -89,7 +129,7 @@ impl Midpoint for ArchIntRegState {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Default, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Copy, Clone, Default, Eq, PartialEq, Deserialize, Serialize)]
 pub struct CSRState {
     pub privilege_mode: u64,
     pub mstatus: u64,
@@ -109,6 +149,58 @@ pub struct CSRState {
     pub sscratch: u64,
     pub mideleg: u64,
     pub medeleg: u64,
+}
+
+impl CSRState {
+    fn fields(&self) -> [(&'static str, u64); 18] {
+        [
+            ("privilege_mode", self.privilege_mode),
+            ("mstatus", self.mstatus),
+            ("sstatus", self.sstatus),
+            ("mepc", self.mepc),
+            ("sepc", self.sepc),
+            ("mtval", self.mtval),
+            ("stval", self.stval),
+            ("mtvec", self.mtvec),
+            ("stvec", self.stvec),
+            ("mcause", self.mcause),
+            ("scause", self.scause),
+            ("satp", self.satp),
+            ("mip", self.mip),
+            ("mie", self.mie),
+            ("mscratch", self.mscratch),
+            ("sscratch", self.sscratch),
+            ("mideleg", self.mideleg),
+            ("medeleg", self.medeleg),
+        ]
+    }
+}
+
+impl Display for CSRState {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        writeln!(f, "csr:")?;
+
+        let mut has_printed = false;
+
+        for (name, value) in self.fields() {
+            if f.alternate() || value != 0 {
+                has_printed = true;
+                writeln!(f, "  {:<14} = 0x{:016x}", name, value)?;
+            }
+        }
+
+        if !has_printed {
+            writeln!(f, "  <all zero>")?;
+        }
+
+        Ok(())
+    }
+}
+
+impl Debug for CSRState {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        Display::fmt(self, f)
+    }
 }
 
 impl State for CSRState {}
@@ -168,7 +260,7 @@ impl Midpoint for CSRState {
     }
 }
 
-#[derive(Clone, Default, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Default, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(bound(serialize = "T: State", deserialize = "T: State",))]
 pub struct StateTracker<T>
 where
@@ -216,6 +308,35 @@ where
 
     pub fn as_mut_slice(&mut self) -> &mut [T] {
         self.tracker.as_mut_slice()
+    }
+}
+
+impl<T> Display for StateTracker<T>
+where
+    T: State,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        writeln!(
+            f,
+            "StateTracker {{ name: {}, len: {} }}",
+            self.name,
+            self.tracker.len()
+        )?;
+
+        for (idx, state) in self.tracker.iter().enumerate() {
+            writeln!(f, "  [{}] {}", idx, state)?;
+        }
+
+        Ok(())
+    }
+}
+
+impl<T> Debug for StateTracker<T>
+where
+    T: State,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        Display::fmt(self, f)
     }
 }
 

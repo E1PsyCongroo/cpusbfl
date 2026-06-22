@@ -103,7 +103,7 @@ pub fn store_testcase(
         for idx in 0..metadata.state_trackers.len() {
             writeln!(
                 state_file,
-                "[{idx}]: PCState({:?}), ArchIntRegState({:?}), CSRState({:?})",
+                "[{idx}]:\n{}{:#}{:#}",
                 metadata.state_trackers.pc_tracker.as_slice()[idx],
                 metadata.state_trackers.arch_int_reg_tracker.as_slice()[idx],
                 metadata.state_trackers.csr_tracker.as_slice()[idx],
