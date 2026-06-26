@@ -101,21 +101,18 @@ fn main() -> i32 {
 
     if args.fuzzing {
         let input_case = harness::load_initial_case(&args.corpus_input);
-        // harness::sim_run_with_trackers(&input_case);
-        // let original_trakcers = state_tracker::trackers().clone();
-
-        let init_case = input_case;
-        // let init_case = if args.reduce {
-        //     reduce::reduce_fault_case(
-        //         &input_case,
-        //         &original_trakcers,
-        //         args.reset_vector,
-        //         args.save_reduce,
-        //         &args.corpus_output,
-        //     )
-        // } else {
-        //     input_case
-        // };
+        let init_case = if args.reduce {
+            harness::sim_run_with_trackers(&input_case);
+            let original_trackers = state_tracker::trackers().clone();
+            reduce::reduce_fault_case(
+                &input_case,
+                &original_trackers,
+                args.save_reduce,
+                &args.output,
+            )
+        } else {
+            input_case
+        };
 
         if let Err(e) = fuzzer::run_fuzzer(
             args.max_iters,

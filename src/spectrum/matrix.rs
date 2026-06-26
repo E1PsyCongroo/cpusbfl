@@ -27,7 +27,17 @@ pub struct CoverageStats {
 
 impl SpectrumMetric {
     pub fn all() -> Vec<&'static str> {
-        vec!["tarantula", "ochiai", "jaccard", "dstar", "gp19", "barinel", "crosstab", "zoltar", "ample"]
+        vec![
+            "tarantula",
+            "ochiai",
+            "jaccard",
+            "dstar",
+            "gp19",
+            "barinel",
+            "crosstab",
+            "zoltar",
+            "ample",
+        ]
     }
 }
 
@@ -36,7 +46,6 @@ impl Default for SpectrumMetric {
         SpectrumMetric::Ochiai
     }
 }
-
 
 pub(crate) fn calculate_suspiciousness(
     cover_name: &str,

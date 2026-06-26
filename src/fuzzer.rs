@@ -93,7 +93,8 @@ fn emit_top_passed_testcases(
 
         log::info!(
             "cover_distance: {}, state_distance: {}",
-            cover_distance, state_distance
+            cover_distance,
+            state_distance
         );
 
         let distance = cover_distance + state_distance;

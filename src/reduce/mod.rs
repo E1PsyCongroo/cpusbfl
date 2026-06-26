@@ -9,12 +9,11 @@ use libafl::prelude::*;
 use crate::harness::{sim_run_with_trackers, sim_with_max_inst};
 use crate::monitor::*;
 use crate::state_tracker::*;
+use inst::*;
 use nop::nop_unexecuted_insts;
 use strip_prefix::strip_irrelevant_prefix;
 use strip_suffix::strip_irrelevant_suffix;
 use trim::trim_after_max_pc;
-
-pub(crate) use inst::{encode_jmp, inst_len_at, pc_to_offset};
 
 fn run_and_collect(input: &BytesInput, max_inst: usize) -> (ExitKind, StateTrackers) {
     sim_with_max_inst(max_inst, || {
@@ -59,14 +58,13 @@ pub fn validate_exact_trace(
 pub(crate) fn reduce_fault_case(
     input: &BytesInput,
     original: &StateTrackers,
-    reset_vector: u64,
     save_reduce: bool,
     output_dir: &Option<String>,
 ) -> BytesInput {
     assert!(original.len() > 0);
     let output_dir = output_dir.as_deref();
 
-    let trimmed_bytes = match trim_after_max_pc(input.mutator_bytes(), &original, reset_vector) {
+    let trimmed_bytes = match trim_after_max_pc(input.mutator_bytes(), &original) {
         Some((bytes, _)) => {
             log::info!("Trim case after max pc successed");
             if save_reduce && output_dir.is_some() {
@@ -78,7 +76,7 @@ pub(crate) fn reduce_fault_case(
     };
 
     let nopped_bytes =
-        match nop_unexecuted_insts(trimmed_bytes.mutator_bytes(), &original, reset_vector) {
+        match nop_unexecuted_insts(trimmed_bytes.mutator_bytes(), &original) {
             Some((bytes, _)) => {
                 log::info!("Nop unexecuted insts successed");
                 if save_reduce && output_dir.is_some() {
@@ -89,8 +87,8 @@ pub(crate) fn reduce_fault_case(
             None => trimmed_bytes.to_owned(),
         };
 
-    let (striped_suffix_bytes, striped_suffix_trackers) =
-        match strip_irrelevant_suffix(nopped_bytes.mutator_bytes(), original, reset_vector) {
+    let (striped_suffix_bytes, _striped_suffix_trackers) =
+        match strip_irrelevant_suffix(nopped_bytes.mutator_bytes(), original) {
             Some((bytes, trackers)) => {
                 log::info!("Strip irrelevant suffix insts successed");
                 if save_reduce && output_dir.is_some() {

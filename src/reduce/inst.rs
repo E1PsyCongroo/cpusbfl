@@ -38,8 +38,8 @@ const REG_COUNT: usize = 32;
 const ZERO_REG: u32 = 0;
 const SP_REG: usize = 2;
 
-const COMPRESSED_INST_BYTES: usize = 2;
-const STANDARD_INST_BYTES: usize = 4;
+pub(crate) const COMPRESSED_INST_BYTES: usize = 2;
+pub(crate) const STANDARD_INST_BYTES: usize = 4;
 const INST_LEN_TAG_MASK: u16 = 0b11;
 const STANDARD_INST_LEN_TAG: u16 = 0b11;
 
@@ -119,14 +119,6 @@ pub(crate) fn inst_len_at(input: &[u8], offset: usize) -> usize {
     assert!(offset + inst_len <= input.len());
 
     inst_len
-}
-
-pub(crate) fn pc_to_offset(input: &[u8], reset_vector: u64, pc: u64) -> usize {
-    assert!(pc >= reset_vector);
-    let offset = usize::try_from(pc - reset_vector).unwrap();
-    assert!(offset < input.len());
-
-    offset
 }
 
 fn push_inst(output: &mut Vec<u8>, inst: u32) {

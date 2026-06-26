@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use libafl::prelude::*;
 
 use super::inst::{C_NOP, NOP};
+use crate::elf::*;
 use crate::reduce::*;
 use crate::state_tracker::*;
 
@@ -31,8 +32,8 @@ fn insts_to_failure_after_jal(pc_trace: &StateTracker<PCState>, candidate_pc: u6
 fn nop_skipped_suffix_insts(
     bytes: &mut [u8],
     input: &[u8],
+    sections: &[ExecutableSection],
     original: &StateTrackers,
-    reset_vector: u64,
     candidate_pc: u64,
     failure_pc: u64,
 ) -> Option<()> {
@@ -51,8 +52,15 @@ fn nop_skipped_suffix_insts(
             continue;
         }
 
-        let offset = usize::try_from(state.value.checked_sub(reset_vector)?).ok()?;
-        if offset.checked_add(2)? > input.len() || !nopped.insert(offset) {
+        let offset = executable_section_containing_vma(
+            &sections,
+            state.value,
+            state.value + u64::try_from(COMPRESSED_INST_BYTES).ok()?,
+        )?
+        .vma_to_offset(state.value)?;
+        if offset.checked_add(COMPRESSED_INST_BYTES)? > input.len()
+            || !nopped.insert(offset)
+        {
             continue;
         }
 
@@ -74,13 +82,18 @@ fn nop_skipped_suffix_insts(
 
 fn try_jal_to_failure_site(
     input: &[u8],
+    sections: &[ExecutableSection],
     candidate_pc: u64,
     failure_pc: u64,
     original: &StateTrackers,
-    reset_vector: u64,
 ) -> Option<(BytesInput, StateTrackers)> {
     let mut bytes = input.to_vec();
-    let offset = pc_to_offset(&bytes, reset_vector, candidate_pc);
+    let offset = executable_section_containing_vma(
+        &sections,
+        candidate_pc,
+        candidate_pc + u64::try_from(STANDARD_INST_BYTES).ok()?,
+    )?
+    .vma_to_offset(candidate_pc)?;
 
     let jmp = encode_jmp(candidate_pc, failure_pc, false, None)?;
     assert!(jmp.len() == 4, "only support 4-byte jmp for now");
@@ -88,8 +101,8 @@ fn try_jal_to_failure_site(
     nop_skipped_suffix_insts(
         &mut bytes,
         input,
+        sections,
         original,
-        reset_vector,
         candidate_pc,
         failure_pc,
     )?;
@@ -101,12 +114,10 @@ fn try_jal_to_failure_site(
 pub fn strip_irrelevant_suffix(
     input: &[u8],
     original: &StateTrackers,
-    reset_vector: u64,
 ) -> Option<(BytesInput, StateTrackers)> {
     log::info!("Stripping irrelevant suffix...");
-    let pc_trace = &original.pc_tracker;
-    assert!(pc_trace.len() > 0);
 
+    let pc_trace = &original.pc_tracker;
     let failure_pc = pc_trace.as_slice().last().unwrap().value;
     let candidates: Vec<u64> = first_dynamic_pcs(pc_trace)
         .into_iter()
@@ -117,13 +128,19 @@ pub fn strip_irrelevant_suffix(
         })
         .collect();
 
+    let sections = parse_executable_sections(input)
+        .inspect_err(|err| {
+            log::warn!("Failed to parse executable ELF sections for strip suffix reduction: {err}")
+        })
+        .ok()?;
+
     let mut low = 0usize;
     let mut high = candidates.len();
     let mut best = None;
 
     while low < high {
         let mid = low + (high - low) / 2;
-        match try_jal_to_failure_site(input, candidates[mid], failure_pc, original, reset_vector) {
+        match try_jal_to_failure_site(input, &sections, candidates[mid], failure_pc, original) {
             Some((candidate, trackers)) => {
                 best = Some((candidate, trackers));
                 high = mid;
