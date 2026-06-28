@@ -1,24 +1,11 @@
-use std::collections::HashSet;
-
 use libafl::prelude::*;
+use lief;
+use lief::generic::Section;
 
 use super::inst::{C_NOP, NOP};
 use crate::elf::*;
 use crate::reduce::*;
 use crate::state_tracker::*;
-
-fn first_dynamic_pcs(pc_trace: &StateTracker<PCState>) -> Vec<u64> {
-    let mut seen = HashSet::new();
-    let mut pcs = Vec::new();
-
-    for state in pc_trace.iter() {
-        if seen.insert(state.value) {
-            pcs.push(state.value);
-        }
-    }
-
-    pcs
-}
 
 fn insts_to_failure_after_jal(pc_trace: &StateTracker<PCState>, candidate_pc: u64) -> usize {
     let candidate_idx = pc_trace
@@ -32,7 +19,7 @@ fn insts_to_failure_after_jal(pc_trace: &StateTracker<PCState>, candidate_pc: u6
 fn nop_skipped_suffix_insts(
     bytes: &mut [u8],
     input: &[u8],
-    sections: &[ExecutableSection],
+    elf_parser: &ELFParser,
     original: &StateTrackers,
     candidate_pc: u64,
     failure_pc: u64,
@@ -52,21 +39,29 @@ fn nop_skipped_suffix_insts(
             continue;
         }
 
-        let offset = executable_section_containing_vma(
-            &sections,
+        let section = elf_parser.section_containing_vma(
             state.value,
-            state.value + u64::try_from(COMPRESSED_INST_BYTES).ok()?,
-        )?
-        .vma_to_offset(state.value)?;
-        if offset.checked_add(COMPRESSED_INST_BYTES)? > input.len()
-            || !nopped.insert(offset)
-        {
+            state
+                .value
+                .checked_add(u64::try_from(COMPRESSED_INST_BYTES).ok()?)?,
+        )?;
+        let offset = usize::try_from(
+            state
+                .value
+                .checked_sub(section.virtual_address())?
+                .checked_add(section.offset())?,
+        )
+        .ok()?;
+        let section_file_end =
+            usize::try_from(section.offset().checked_add(section.size())?).ok()?;
+
+        if offset.checked_add(COMPRESSED_INST_BYTES)? > section_file_end || !nopped.insert(offset) {
             continue;
         }
 
         let inst_len = inst_len_at(input, offset);
         let end = offset.checked_add(inst_len)?;
-        if end > bytes.len() {
+        if end > section_file_end {
             return None;
         }
 
@@ -82,26 +77,24 @@ fn nop_skipped_suffix_insts(
 
 fn try_jal_to_failure_site(
     input: &[u8],
-    sections: &[ExecutableSection],
+    elf_parser: &ELFParser,
     candidate_pc: u64,
     failure_pc: u64,
     original: &StateTrackers,
 ) -> Option<(BytesInput, StateTrackers)> {
     let mut bytes = input.to_vec();
-    let offset = executable_section_containing_vma(
-        &sections,
+    let offset = usize::try_from(elf_parser.vma2offset(
         candidate_pc,
-        candidate_pc + u64::try_from(STANDARD_INST_BYTES).ok()?,
-    )?
-    .vma_to_offset(candidate_pc)?;
+        candidate_pc.checked_add(u64::try_from(STANDARD_INST_BYTES).ok()?)?,
+    )?)
+    .ok()?;
 
     let jmp = encode_jmp(candidate_pc, failure_pc, false, None)?;
-    assert!(jmp.len() == 4, "only support 4-byte jmp for now");
-    bytes[offset..offset + 4].copy_from_slice(&jmp);
+    bytes[offset..offset.checked_add(STANDARD_INST_BYTES)?].copy_from_slice(&jmp);
     nop_skipped_suffix_insts(
         &mut bytes,
         input,
-        sections,
+        elf_parser,
         original,
         candidate_pc,
         failure_pc,
@@ -115,23 +108,22 @@ pub fn strip_irrelevant_suffix(
     input: &[u8],
     original: &StateTrackers,
 ) -> Option<(BytesInput, StateTrackers)> {
-    log::info!("Stripping irrelevant suffix...");
+    log::info!("Stripping irrelevant suffix, input_size={:#x}", input.len());
 
     let pc_trace = &original.pc_tracker;
     let failure_pc = pc_trace.as_slice().last().unwrap().value;
-    let candidates: Vec<u64> = first_dynamic_pcs(pc_trace)
+    let candidates: Vec<u64> = first_dynamic_entries(pc_trace)
         .into_iter()
+        .map(|(_, pc)| pc)
         .filter(|&pc| {
             pc != failure_pc
-                && pc + 2 != failure_pc
+                && pc.checked_add(COMPRESSED_INST_BYTES as u64) != Some(failure_pc)
                 && encode_jmp(pc, failure_pc, false, None).is_some()
         })
         .collect();
 
-    let sections = parse_executable_sections(input)
-        .inspect_err(|err| {
-            log::warn!("Failed to parse executable ELF sections for strip suffix reduction: {err}")
-        })
+    let elf_parse = ELFParser::from_bytes(input)
+        .inspect_err(|err| log::warn!("Failed to parse ELF for strip suffix reduction: {err}"))
         .ok()?;
 
     let mut low = 0usize;
@@ -140,7 +132,7 @@ pub fn strip_irrelevant_suffix(
 
     while low < high {
         let mid = low + (high - low) / 2;
-        match try_jal_to_failure_site(input, &sections, candidates[mid], failure_pc, original) {
+        match try_jal_to_failure_site(input, &elf_parse, candidates[mid], failure_pc, original) {
             Some((candidate, trackers)) => {
                 best = Some((candidate, trackers));
                 high = mid;

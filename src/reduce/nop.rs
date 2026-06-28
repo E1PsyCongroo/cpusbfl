@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 
 use libafl::prelude::*;
+use lief;
+use lief::generic::Section;
 
 use crate::elf::*;
 use crate::reduce::*;
@@ -13,16 +15,19 @@ struct CodeInst {
     len: usize,
 }
 
-fn collect_code_insts(input: &[u8], sections: &[ExecutableSection]) -> Option<Vec<CodeInst>> {
+fn collect_code_insts(input: &[u8], sections: &[lief::elf::Section]) -> Option<Vec<CodeInst>> {
     let mut insts = Vec::new();
 
     for section in sections {
-        let mut offset = section.file_offset;
-        let mut pc = section.vma_start;
+        let mut offset = usize::try_from(section.offset()).ok()?;
+        let mut pc = section.virtual_address();
 
-        while offset + 2 <= section.file_end && pc < section.vma_end {
+        let file_end = offset + usize::try_from(section.size()).ok()?;
+        let vma_end = section.virtual_address() + section.size();
+
+        while offset.checked_add(COMPRESSED_INST_BYTES)? <= file_end && pc < vma_end {
             let inst_len = inst_len_at(input, offset);
-            if offset + inst_len > section.file_end {
+            if offset.checked_add(inst_len)? > file_end {
                 break;
             }
             insts.push(CodeInst {
@@ -91,14 +96,15 @@ pub fn nop_unexecuted_insts(
     input: &[u8],
     original: &StateTrackers,
 ) -> Option<(BytesInput, StateTrackers)> {
-    log::info!("Nopping unexecuted instructions...");
+    log::info!(
+        "Nopping unexecuted instructions, input_size={:#x}",
+        input.len()
+    );
 
-    let sections = parse_executable_sections(input)
-        .inspect_err(|err| {
-            log::warn!("Failed to parse executable ELF sections for nop reduction: {err}")
-        })
+    let elf_parser = ELFParser::from_bytes(input)
+        .inspect_err(|err| log::warn!("Failed to parse ELF for nop reduction: {err}"))
         .ok()?;
-    let insts = collect_code_insts(input, &sections)?;
+    let insts = collect_code_insts(input, elf_parser.borrow_executable_sections())?;
 
     let executed = original
         .pc_tracker
@@ -108,10 +114,6 @@ pub fn nop_unexecuted_insts(
 
     if let Some(result) = try_keep_window(input, &insts, &executed, original, None) {
         return Some(result);
-    }
-
-    if insts.is_empty() {
-        return None;
     }
 
     let mut last_failed = 0usize;

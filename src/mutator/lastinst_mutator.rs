@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use libafl::prelude::*;
 use libafl_bolts::{Named, rands::Rand};
 
-use crate::elf::elf_vma_to_offset;
+use crate::elf::*;
 
 const MUTATED_INST_BYTES: usize = 4;
 #[derive(Debug)]
@@ -12,9 +12,14 @@ pub(crate) struct LastInstMutator {
 }
 
 impl LastInstMutator {
-    pub(crate) fn new(elf_bytes: &[u8], last_pc: u64) -> Result<Self, Error> {
-        let offset = elf_vma_to_offset(elf_bytes, last_pc, last_pc + MUTATED_INST_BYTES as u64)
-            .map_err(|err| Error::illegal_argument(err.to_string()))?;
+    pub(crate) fn new(elf_bytes: &[u8], last_pc: u64) -> Result<Self, Box<dyn std::error::Error>> {
+        let elf_parser = ELFParser::from_bytes(elf_bytes)?;
+        let offset = usize::try_from(
+            elf_parser
+                .borrow_elf()
+                .virtual_address_to_offset(last_pc)
+                .map_err(|e| e.to_string())?,
+        )?;
 
         Ok(Self { offset })
     }

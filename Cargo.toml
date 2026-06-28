@@ -10,7 +10,7 @@ std = []
 
 [dependencies]
 libafl = { version = "0.15.4", features = ["prelude"] }
-libafl_bolts ={ version = "0.15.4" }
+libafl_bolts = { version = "0.15.4" }
 clap = { version = "4.5.20", features = ["derive"] }
 libc = "0.2"
 md5 = "0.7"
@@ -20,15 +20,15 @@ serde_json = { version = "1.0.149", default-features = false }
 dtw_rs = "0.10.0"
 ndarray = "0.17.2"
 tempfile = "3"
-goblin = "0.10"
-lief = "0.17.6"
+lief = { git = "https://github.com/lief-project/LIEF", branch = "main" }
+ouroboros = "0.18.5"
 sv-parser = "0.13.5"
 log = "0.4.33"
 env_logger = "0.11.10"
 
 [lib]
 name = "cpusbfl"
-crate-type = ["staticlib"]
+crate-type = ["cdylib"]
 
 [profile.release]
 lto = true

@@ -105,8 +105,8 @@ fn main() -> i32 {
             harness::sim_run_with_trackers(&input_case);
             let original_trackers = state_tracker::trackers().clone();
             reduce::reduce_fault_case(
-                &input_case,
-                &original_trackers,
+                input_case,
+                original_trackers,
                 args.save_reduce,
                 &args.output,
             )

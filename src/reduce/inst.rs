@@ -82,14 +82,14 @@ const AMO_FUNCT5_MAX: u32 = 0b10100;
 const AMO_FUNCT5_MINU: u32 = 0b11000;
 const AMO_FUNCT5_MAXU: u32 = 0b11100;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct MemoryWrite {
     addr: u64,
     value: u64,
     width: StoreWidth,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum StoreWidth {
     Byte,
     Half,
@@ -213,6 +213,7 @@ fn encode_signed_imm12(value: i128) -> u32 {
     (value as i32 as u32) & IMM12_MASK
 }
 
+// TODO: to support rv32/rv64
 pub(crate) fn append_load_u64(output: &mut Vec<u8>, rd: u8, value: u64) -> u64 {
     let mut append_inst_count = 0;
     if is_int_n(value, 32) {
@@ -222,7 +223,8 @@ pub(crate) fn append_load_u64(output: &mut Vec<u8>, rd: u8, value: u64) -> u64 {
             push_inst(output, encode_lui(rd, hi20));
             append_inst_count += 1;
             if lo12 != 0 {
-                push_inst(output, encode_addiw(rd, rd, lo12));
+                push_inst(output, encode_addi(rd, rd, lo12));
+                // push_inst(output, encode_addiw(rd, rd, lo12));
                 append_inst_count += 1;
             }
         } else {
