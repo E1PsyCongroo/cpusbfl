@@ -1,9 +1,8 @@
 use std::collections::HashSet;
-use std::io::Write;
 
 use libafl::prelude::*;
 
-use super::inst::*;
+use crate::inst::*;
 use crate::elf::*;
 use crate::reduce::*;
 use crate::state_tracker::*;
@@ -59,7 +58,7 @@ fn collect_memory_writes(
         let regs = &arch_trace.get(idx)?.value;
         let offset = usize::try_from(elf_parser.vma2offset(
             pc,
-            pc.checked_add(u64::try_from(COMPRESSED_INST_BYTES).ok()?)?,
+            pc.checked_add(COMPRESSED_INST_BYTES as u64)?,
         )?)
         .ok()?;
 
@@ -191,7 +190,7 @@ fn nop_skipped_prefix_insts(
                 state.value,
                 state
                     .value
-                    .checked_add(u64::try_from(STANDARD_INST_BYTES).ok()?)?,
+                    .checked_add(STANDARD_INST_BYTES as u64)?,
             )?,
         )
         .ok()?;

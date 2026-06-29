@@ -15,10 +15,8 @@ pub fn trim_after_max_pc(
         .ok()?;
     let max_pc = original.pc_tracker.iter().map(|state| state.value).max()?;
 
-    let section = elf_parser.section_containing_vma(
-        max_pc,
-        max_pc.checked_add(u64::try_from(COMPRESSED_INST_BYTES).ok()?)?,
-    )?;
+    let section = elf_parser
+        .section_containing_vma(max_pc, max_pc.checked_add(COMPRESSED_INST_BYTES as u64)?)?;
     let section_name = section.name();
     let max_offset = max_pc
         .checked_sub(section.virtual_address())?

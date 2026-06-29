@@ -1,4 +1,3 @@
-mod inst;
 mod nop;
 mod strip_prefix;
 mod strip_suffix;
@@ -12,7 +11,7 @@ use crate::elf::*;
 use crate::harness::{sim_run_with_trackers, sim_with_max_inst};
 use crate::monitor::*;
 use crate::state_tracker::*;
-use inst::*;
+use crate::inst::*;
 use nop::nop_unexecuted_insts;
 use strip_prefix::strip_irrelevant_prefix;
 use strip_suffix::strip_irrelevant_suffix;

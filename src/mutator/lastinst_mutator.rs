@@ -4,24 +4,33 @@ use libafl::prelude::*;
 use libafl_bolts::{Named, rands::Rand};
 
 use crate::elf::*;
+use crate::inst::*;
 
-const MUTATED_INST_BYTES: usize = 4;
 #[derive(Debug)]
 pub(crate) struct LastInstMutator {
     offset: usize,
+    len: usize,
 }
 
 impl LastInstMutator {
     pub(crate) fn new(elf_bytes: &[u8], last_pc: u64) -> Result<Self, Box<dyn std::error::Error>> {
         let elf_parser = ELFParser::from_bytes(elf_bytes)?;
-        let offset = usize::try_from(
-            elf_parser
-                .borrow_elf()
-                .virtual_address_to_offset(last_pc)
-                .map_err(|e| e.to_string())?,
-        )?;
+        let min_inst_end = last_pc + COMPRESSED_INST_BYTES as u64;
+        let offset = usize::try_from(elf_parser.vma2offset(last_pc, min_inst_end).ok_or_else(
+            || {
+                format!(
+                    "failed to convert last_pc VMA range to file offset: \
+                         vma={last_pc:#x}..{min_inst_end:#x}"
+                )
+            },
+        )?)?;
 
-        Ok(Self { offset })
+        let inst_len = inst_len_at(elf_bytes, offset);
+
+        Ok(Self {
+            offset: offset,
+            len: inst_len,
+        })
     }
 }
 
@@ -31,7 +40,7 @@ where
     I: HasMutatorBytes,
 {
     fn mutate(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error> {
-        let Some(mutated_end) = self.offset.checked_add(MUTATED_INST_BYTES) else {
+        let Some(mutated_end) = self.offset.checked_add(self.len) else {
             return Ok(MutationResult::Skipped);
         };
 
@@ -42,7 +51,7 @@ where
 
         let mutated_word = state.rand_mut().next().to_le_bytes();
         let bytes = input.mutator_bytes_mut();
-        bytes[self.offset..mutated_end].copy_from_slice(&mutated_word[..MUTATED_INST_BYTES]);
+        bytes[self.offset..mutated_end].copy_from_slice(&mutated_word[..self.len]);
         Ok(MutationResult::Mutated)
     }
 

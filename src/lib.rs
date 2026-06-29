@@ -5,6 +5,7 @@ mod elf;
 mod feedback;
 mod fuzzer;
 mod harness;
+mod inst;
 mod monitor;
 mod mutator;
 mod observer;
@@ -26,16 +27,18 @@ struct Arguments {
     state: String,
     #[clap(default_value_t = false, short, long)]
     reduce: bool,
+    #[clap(default_value_t = false, long)]
+    save_reduce: bool,
     #[clap(default_value_t = 100, long)]
     max_iters: u64,
     #[clap(default_value_t = 10, long)]
     max_run_timeout: u64,
+    #[clap(default_value_t = 20, long)]
+    mutator_window_size: u64,
     #[clap(default_value_t = String::from("./corpus"), long)]
     corpus_input: String,
     #[clap(long)]
     output: Option<String>,
-    #[clap(default_value_t = false, long)]
-    save_reduce: bool,
     // SBFL options
     #[clap(default_value_t = 10, long)]
     top_pass: u64,
@@ -51,8 +54,6 @@ struct Arguments {
     top_scope: Option<String>,
     #[clap(default_value_t = spectrum::matrix::SpectrumMetric::Ochiai, long, value_enum)]
     metric: spectrum::matrix::SpectrumMetric,
-    #[arg(long)]
-    ground_truth: Option<String>,
     // Run options
     #[clap(default_value_t = 1, long)]
     repeat: usize,
@@ -117,6 +118,7 @@ fn main() -> i32 {
         if let Err(e) = fuzzer::run_fuzzer(
             args.max_iters,
             args.max_run_timeout,
+            args.mutator_window_size,
             args.top_pass,
             &init_case,
             &args.output,

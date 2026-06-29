@@ -11,6 +11,7 @@ use crate::feedback::{coverages_feedback::*, passed_feedback::*, statetrackers_f
 use crate::harness::{self, SIM_ARGS, sim_run_with_trackers};
 use crate::monitor::{self, store_testcase};
 use crate::mutator::lastinst_mutator::*;
+use crate::mutator::lastwindow_mutator::LastWindowMutator;
 use crate::observer::{coverages_observer::*, statetrackers_observer::*};
 use crate::reduce::*;
 use crate::similarity::*;
@@ -151,6 +152,7 @@ fn emit_top_passed_testcases(
 pub(crate) fn run_fuzzer(
     max_iters: u64,
     max_run_timeout: u64,
+    mutator_window_size: u64,
     top_n: u64,
     init_case: &BytesInput,
     output: &Option<String>,
@@ -234,13 +236,6 @@ pub(crate) fn run_fuzzer(
     }
 
     let max_inst = init_metadata.state_trackers.len();
-    let last_pc = init_metadata
-        .state_trackers
-        .pc_tracker
-        .as_slice()
-        .last()
-        .unwrap()
-        .value;
     SIM_ARGS
         .get()
         .unwrap()
@@ -249,9 +244,10 @@ pub(crate) fn run_fuzzer(
         .extend(vec!["-I".to_string(), max_inst.to_string()].into_iter());
 
     // Fuzzing Loop
-    let mutator = StdScheduledMutator::new(tuple_list!(LastInstMutator::new(
+    let mutator = StdScheduledMutator::new(tuple_list!(LastWindowMutator::new(
         init_case.mutator_bytes(),
-        last_pc
+        &init_metadata.state_trackers.pc_tracker,
+        mutator_window_size
     )?));
     let mut stages = tuple_list!(StdMutationalStage::new(mutator));
 

@@ -2,8 +2,8 @@ use libafl::prelude::*;
 use lief;
 use lief::generic::Section;
 
-use super::inst::{C_NOP, NOP};
 use crate::elf::*;
+use crate::inst::{C_NOP, NOP};
 use crate::reduce::*;
 use crate::state_tracker::*;
 
@@ -41,9 +41,7 @@ fn nop_skipped_suffix_insts(
 
         let section = elf_parser.section_containing_vma(
             state.value,
-            state
-                .value
-                .checked_add(u64::try_from(COMPRESSED_INST_BYTES).ok()?)?,
+            state.value.checked_add(COMPRESSED_INST_BYTES as u64)?,
         )?;
         let offset = usize::try_from(
             state
@@ -85,7 +83,7 @@ fn try_jal_to_failure_site(
     let mut bytes = input.to_vec();
     let offset = usize::try_from(elf_parser.vma2offset(
         candidate_pc,
-        candidate_pc.checked_add(u64::try_from(STANDARD_INST_BYTES).ok()?)?,
+        candidate_pc.checked_add(STANDARD_INST_BYTES as u64)?,
     )?)
     .ok()?;
 
