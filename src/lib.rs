@@ -6,15 +6,19 @@ mod feedback;
 mod fuzzer;
 mod harness;
 mod inst;
-mod monitor;
 mod mutator;
 mod observer;
 mod reduce;
 mod similarity;
 mod spectrum;
 mod state_tracker;
+mod utils;
+
+use std::fmt::Error;
 
 use clap::Parser;
+
+use crate::harness::SIM_ARGS;
 
 #[derive(Parser, Default, Debug)]
 struct Arguments {
@@ -63,7 +67,7 @@ struct Arguments {
 }
 
 #[unsafe(no_mangle)]
-fn main() -> i32 {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let args = Arguments::parse();
@@ -86,14 +90,28 @@ fn main() -> i32 {
 
     harness::set_sim_env(args.coverage, args.state, emu_args);
 
-    let mut has_failed = 0;
-    if workloads.len() > 0 {
-        for _ in 0..args.repeat {
+    if !workloads.is_empty() {
+        let workloads_display = workloads.join(", ");
+        let emu_args_display = SIM_ARGS
+            .get()
+            .unwrap()
+            .lock()
+            .expect("SIM_ARGS poisoned mutex")
+            .join(", ");
+
+        for idx in 0..args.repeat {
             let ret = harness::sim_run_multiple(&workloads, true, false, args.auto_exit);
             if ret != 0 {
-                has_failed = 1;
                 if args.auto_exit {
-                    return ret;
+                    return Err(format!(
+                        "workload exited with non-zero status: ret={ret}, \
+                 repeat={}/{}, workloads=[{}], emu_args=[{}]",
+                        idx + 1,
+                        args.repeat,
+                        workloads_display,
+                        emu_args_display,
+                    )
+                    .into());
                 }
             }
             coverage::all_cover_display();
@@ -101,7 +119,7 @@ fn main() -> i32 {
     }
 
     if args.fuzzing {
-        let input_case = harness::load_initial_case(&args.corpus_input);
+        let input_case = utils::load_initial_case(&args.corpus_input)?;
         let init_case = if args.reduce {
             harness::sim_run_with_trackers(&input_case);
             let original_trackers = state_tracker::trackers().clone();
@@ -115,7 +133,7 @@ fn main() -> i32 {
             input_case
         };
 
-        if let Err(e) = fuzzer::run_fuzzer(
+        fuzzer::run_fuzzer(
             args.max_iters,
             args.max_run_timeout,
             args.mutator_window_size,
@@ -134,11 +152,8 @@ fn main() -> i32 {
                 &args.top_scope,
                 &args.output,
             )
-        }) {
-            log::error!("{e}");
-            has_failed = 1;
-        }
+        })?;
     }
 
-    return has_failed;
+    Ok(())
 }

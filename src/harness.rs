@@ -1,8 +1,6 @@
 use std::{
     ffi::{CString, c_char, c_int, c_uint, c_void},
-    fs,
     io::{self, Write},
-    path::PathBuf,
     sync::{Mutex, OnceLock},
 };
 
@@ -10,8 +8,8 @@ use libafl::prelude::*;
 use tempfile::Builder;
 
 use crate::coverage::*;
-use crate::monitor::store_testcase;
 use crate::state_tracker::*;
+use crate::utils::store_testcase;
 
 unsafe extern "C" {
     pub fn sim_main(argc: c_int, argv: *const *const c_char) -> c_int;
@@ -116,32 +114,6 @@ pub(crate) fn sim_run_multiple(
 
 pub static mut SAVE_ERRORS: bool = false;
 
-pub(crate) fn load_initial_case(corpus_input: &str) -> BytesInput {
-    let path = PathBuf::from(corpus_input);
-    let input_path = if path.is_file() {
-        path.clone()
-    } else if path.is_dir() {
-        let mut entries = fs::read_dir(&path)
-            .unwrap_or_else(|err| panic!("Failed to read corpus_input {path:?}: {err}"))
-            .filter_map(|entry| entry.ok())
-            .map(|entry| entry.path())
-            .filter(|entry_path| entry_path.is_file())
-            .collect::<Vec<_>>();
-        entries.sort();
-        entries
-            .into_iter()
-            .next()
-            .unwrap_or_else(|| panic!("No testcase found in corpus_input directory {path:?}"))
-    } else {
-        panic!("corpus_input {path:?} is neither a file nor a directory")
-    };
-
-    let bytes = fs::read(&input_path)
-        .unwrap_or_else(|err| panic!("Failed to read initial fault case {input_path:?}: {err}"));
-
-    BytesInput::new(bytes)
-}
-
 pub(crate) fn sim_run_with_trackers(input: &BytesInput) -> ExitKind {
     let ret = sim_run_from_memory(input, false, false);
 
@@ -196,7 +168,7 @@ pub(crate) fn fuzz_harness(input: &BytesInput) -> ExitKind {
     // save the target testcase into disk
     let do_save = unsafe { SAVE_ERRORS && ret != 0 };
     if do_save {
-        store_testcase(input, None, "errors", None);
+        store_testcase(input, None, "errors", None).unwrap();
     }
 
     if ret != 0 {

@@ -1,4 +1,4 @@
-use std::{path::PathBuf, time::Duration};
+use std::io::Write;
 
 use libafl::{
     StdFuzzer, mutators::scheduled::SingleChoiceScheduledMutator as StdScheduledMutator,
@@ -8,14 +8,14 @@ use libafl_bolts::{current_nanos, rands::StdRand, tuples::tuple_list};
 
 use crate::coverage::*;
 use crate::feedback::{coverages_feedback::*, passed_feedback::*, statetrackers_feedback::*};
-use crate::harness::{self, SIM_ARGS, sim_run_with_trackers};
-use crate::monitor::{self, store_testcase};
+use crate::harness::{self, SIM_ARGS};
 use crate::mutator::lastinst_mutator::*;
 use crate::mutator::lastwindow_mutator::LastWindowMutator;
 use crate::observer::{coverages_observer::*, statetrackers_observer::*};
 use crate::reduce::*;
 use crate::similarity::*;
 use crate::state_tracker::*;
+use crate::utils::{process_cpu_time_now, store_testcase};
 
 pub(crate) struct CaseMetadata {
     pub covers: Coverages,
@@ -137,7 +137,7 @@ fn emit_top_passed_testcases(
 
         if let Some(output_dir) = &output {
             let filename = format!("rank_{:04}_id_{}_dst_{:.6}", rank + 1, id, distance);
-            monitor::store_testcase(input, Some(metadata), output_dir, Some(&filename));
+            store_testcase(input, Some(metadata), output_dir, Some(&filename))?;
         }
     }
 
@@ -197,7 +197,7 @@ pub(crate) fn run_fuzzer(
         &mut fuzzer,
         &mut state,
         &mut mgr,
-        Duration::from_secs(max_run_timeout),
+        std::time::Duration::from_secs(max_run_timeout),
     )
     .unwrap();
 
@@ -226,13 +226,13 @@ pub(crate) fn run_fuzzer(
         return Err("Initial case was not accepted into the main corpus by feedback".into());
     }
 
-    if let Some(output_dir) = &output {
+    if let Some(output_dir) = output.as_ref() {
         store_testcase(
             init_case,
             Some(&init_metadata),
             output_dir,
             Some("init_case"),
-        );
+        )?;
     }
 
     let max_inst = init_metadata.state_trackers.len();
@@ -240,7 +240,7 @@ pub(crate) fn run_fuzzer(
         .get()
         .unwrap()
         .lock()
-        .expect("poisoned mutex")
+        .expect("SIM_ARGS poisoned mutex")
         .extend(vec!["-I".to_string(), max_inst.to_string()].into_iter());
 
     // Fuzzing Loop
@@ -251,7 +251,22 @@ pub(crate) fn run_fuzzer(
     )?));
     let mut stages = tuple_list!(StdMutationalStage::new(mutator));
 
+    let fuzzing_start_time = process_cpu_time_now()?;
     fuzzer.fuzz_loop_for(&mut stages, &mut executor, &mut state, &mut mgr, max_iters)?;
+    let fuzzing_end_time = process_cpu_time_now()?;
+    let fuzzing_elapsed = fuzzing_end_time
+        .checked_sub(fuzzing_start_time)
+        .unwrap_or_default();
+
+    log::info!("Fuzzing process CPU time = {fuzzing_elapsed:?}");
+
+    if let Some(output_dir) = output.as_ref() {
+        let mut fuzzing_time_fs = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(std::path::PathBuf::from(format!("{output_dir}/fuzzing_time.txt")).as_path())?;
+        writeln!(&mut fuzzing_time_fs, "{fuzzing_elapsed:?}")?;
+    }
 
     for cover_name in cover_names() {
         log::trace!("init_case cover points of {cover_name}:");

@@ -302,7 +302,7 @@ pub(crate) fn coverages() -> std::sync::MutexGuard<'static, Coverages> {
         .get()
         .expect("cover_init() not called")
         .lock()
-        .expect("poisoned mutex")
+        .expect("COVERAGES poisoned mutex")
 }
 
 fn accumulated_coverages() -> std::sync::MutexGuard<'static, AccumulatedCoverages> {
@@ -310,7 +310,7 @@ fn accumulated_coverages() -> std::sync::MutexGuard<'static, AccumulatedCoverage
         .get()
         .expect("cover_init() not called")
         .lock()
-        .expect("poisoned mutex")
+        .expect("ACCUMULATED_COVERAGES poisoned mutex")
 }
 
 fn get_accumulative_coverage(cover_name: &str) -> f64 {

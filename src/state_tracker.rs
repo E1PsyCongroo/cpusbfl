@@ -426,7 +426,7 @@ pub(crate) fn trackers() -> std::sync::MutexGuard<'static, StateTrackers> {
         .get()
         .expect("state_tracker_init() not called")
         .lock()
-        .expect("poisoned mutex")
+        .expect("STATE_TRACKERS poisoned mutex")
 }
 
 pub(crate) fn state_names() -> Vec<String> {

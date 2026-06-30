@@ -9,9 +9,9 @@ use libafl::prelude::*;
 
 use crate::elf::*;
 use crate::harness::{sim_run_with_trackers, sim_with_max_inst};
-use crate::monitor::*;
-use crate::state_tracker::*;
 use crate::inst::*;
+use crate::state_tracker::*;
+use crate::utils::*;
 use nop::nop_unexecuted_insts;
 use strip_prefix::strip_irrelevant_prefix;
 use strip_suffix::strip_irrelevant_suffix;
@@ -95,7 +95,7 @@ pub(crate) fn reduce_fault_case(
             Some((bytes, trackers)) => {
                 log::info!("Nop unexecuted insts successed");
                 if save_reduce && output_dir.is_some() {
-                    store_testcase(&bytes, None, output_dir.unwrap(), Some("init_nopped"));
+                    store_testcase(&bytes, None, output_dir.unwrap(), Some("init_nopped")).unwrap();
                 }
                 (bytes, trackers)
             }
@@ -112,7 +112,8 @@ pub(crate) fn reduce_fault_case(
                         None,
                         output_dir.unwrap(),
                         Some("init_striped_suffix"),
-                    );
+                    )
+                    .unwrap();
                 }
                 (bytes, trackers)
             }
@@ -126,7 +127,7 @@ pub(crate) fn reduce_fault_case(
         Some((bytes, trackers)) => {
             log::info!("Trim case after max pc successed");
             if save_reduce && output_dir.is_some() {
-                store_testcase(&bytes, None, output_dir.unwrap(), Some("init_trimmed"));
+                store_testcase(&bytes, None, output_dir.unwrap(), Some("init_trimmed")).unwrap();
             }
             (bytes, trackers)
         }
@@ -145,7 +146,8 @@ pub(crate) fn reduce_fault_case(
                     None,
                     output_dir.unwrap(),
                     Some("init_striped_prefix"),
-                );
+                )
+                .unwrap();
             }
             bytes
         }
