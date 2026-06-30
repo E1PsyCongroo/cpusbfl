@@ -33,10 +33,14 @@ struct Arguments {
     reduce: bool,
     #[clap(default_value_t = false, long)]
     save_reduce: bool,
+    #[clap(default_value_t = false, long)]
+    save_trace: bool,
     #[clap(default_value_t = 100, long)]
     max_iters: u64,
     #[clap(default_value_t = 10, long)]
     max_run_timeout: u64,
+    #[clap(default_value_t = 20, long)]
+    tracker_window_size: u64,
     #[clap(default_value_t = 20, long)]
     mutator_window_size: u64,
     #[clap(default_value_t = String::from("./corpus"), long)]
@@ -136,8 +140,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         fuzzer::run_fuzzer(
             args.max_iters,
             args.max_run_timeout,
+            args.tracker_window_size,
             args.mutator_window_size,
             args.top_pass,
+            args.save_trace,
             &init_case,
             &args.output,
         )

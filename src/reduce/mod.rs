@@ -44,20 +44,8 @@ fn is_same_failure_site(
     candidate_pc == original_pc
 }
 
-pub fn first_dynamic_entries(pc_trace: &StateTracker<PCState>) -> Vec<(usize, u64)> {
-    let mut seen = HashSet::new();
-    let mut entries = Vec::new();
 
-    for (idx, state) in pc_trace.iter().enumerate() {
-        if seen.insert(state.value) {
-            entries.push((idx, state.value));
-        }
-    }
-
-    entries
-}
-
-pub fn validate_exact_trace(
+fn validate_exact_trace(
     input: BytesInput,
     original: &StateTrackers,
     max_inst: usize,

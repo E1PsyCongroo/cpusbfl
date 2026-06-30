@@ -1,4 +1,5 @@
 use std::{
+    arch,
     borrow::Cow,
     fmt::Debug,
     hash::{DefaultHasher, Hash, Hasher},
@@ -18,20 +19,42 @@ use crate::state_tracker::*;
 pub struct StateTrackersObserver {
     name: Cow<'static, str>,
     trackers: OwnedPtr<StateTrackers>,
+    window_size: usize,
     hash: Option<u64>,
 }
 
 impl StateTrackersObserver {
-    pub unsafe fn from_raw(name: &'static str, trackers: &StateTrackers) -> Self {
+    pub unsafe fn from_raw(name: &'static str, trackers: &StateTrackers, window_size: u64) -> Self {
         Self {
             name: Cow::Borrowed(name),
             trackers: unsafe { OwnedPtr::from_raw(trackers) },
+            window_size: usize::try_from(window_size).expect("window_size should fit in usize"),
             hash: None,
         }
     }
 
-    pub fn get_state_tracker(&self) -> &StateTrackers {
-        self.trackers.as_ref()
+    pub fn get_state_tracker(&self) -> StateTrackers {
+        let trackers = self.trackers.as_ref();
+
+        let mut pc_tracker = trackers.pc_tracker.clone();
+        let mut arch_int_reg_tracker = trackers.arch_int_reg_tracker.clone();
+        let mut csr_tracker = trackers.csr_tracker.clone();
+
+        let drop_len = self
+            .trackers
+            .as_ref()
+            .len()
+            .saturating_sub(self.window_size);
+        drop(pc_tracker.drain(..drop_len));
+        drop(arch_int_reg_tracker.drain(..drop_len));
+        drop(csr_tracker.drain(..drop_len));
+
+        StateTrackers {
+            state_names: trackers.state_names.clone(),
+            pc_tracker,
+            arch_int_reg_tracker,
+            csr_tracker,
+        }
     }
 }
 

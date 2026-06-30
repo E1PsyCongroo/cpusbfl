@@ -32,19 +32,23 @@ impl LastWindowMutator {
 
         let elf_parser = ELFParser::from_bytes(elf_bytes)?;
 
-        let trace = pc_trace.as_slice();
+        let trace = first_dynamic_entries(pc_trace)
+            .into_iter()
+            .map(|(_, pc)| pc)
+            .collect::<Vec<_>>();
         if trace.is_empty() {
             return Err("pc_trace is empty".into());
         }
 
-        let start = trace.len().saturating_sub(usize::try_from(window_size)?);
+        let window_size = usize::try_from(window_size)?;
+        let start = trace.len().saturating_sub(window_size);
         let window = &trace[start..];
 
         let mut candidates = Vec::new();
         let mut total_weight = 0u64;
 
-        for (idx_in_window, pc_state) in window.iter().enumerate() {
-            let vma_start = pc_state.value;
+        for (idx_in_window, &pc_state) in window.iter().enumerate() {
+            let vma_start = pc_state;
             let min_vma_end = vma_start + COMPRESSED_INST_BYTES as u64;
 
             let Some(offset) = elf_parser

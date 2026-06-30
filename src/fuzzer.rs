@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::{any::type_name, io::Write};
 
 use libafl::{
     StdFuzzer, mutators::scheduled::SingleChoiceScheduledMutator as StdScheduledMutator,
@@ -9,10 +9,8 @@ use libafl_bolts::{current_nanos, rands::StdRand, tuples::tuple_list};
 use crate::coverage::*;
 use crate::feedback::{coverages_feedback::*, passed_feedback::*, statetrackers_feedback::*};
 use crate::harness::{self, SIM_ARGS};
-use crate::mutator::lastinst_mutator::*;
 use crate::mutator::lastwindow_mutator::LastWindowMutator;
 use crate::observer::{coverages_observer::*, statetrackers_observer::*};
-use crate::reduce::*;
 use crate::similarity::*;
 use crate::state_tracker::*;
 use crate::utils::{process_cpu_time_now, store_testcase};
@@ -24,7 +22,7 @@ pub(crate) struct CaseMetadata {
 }
 
 fn emit_top_passed_testcases(
-    state: &StdState<
+    mut state: StdState<
         InMemoryCorpus<ValueInput<Vec<u8>>>,
         ValueInput<Vec<u8>>,
         StdRand,
@@ -32,68 +30,84 @@ fn emit_top_passed_testcases(
     >,
     init_metadata: CaseMetadata,
     top_n: u64,
+    save_trace: bool,
     output: &Option<String>,
 ) -> Result<Vec<CaseMetadata>, Box<dyn std::error::Error>> {
-    let corpus = state.corpus();
+    let corpus = state.corpus_mut();
     let mut passed_cases = Vec::new();
+    let init_metadata_coverd_counts = init_metadata
+        .covers
+        .names()
+        .into_iter()
+        .map(|cover_name| {
+            let cover = init_metadata.covers.get(&cover_name);
+            (cover_name, cover.len(), cover.covered_counts())
+        })
+        .collect::<Vec<_>>();
+    let init_metadata_core_state = init_metadata
+        .state_trackers
+        .arch_int_reg_tracker
+        .iter()
+        .zip(init_metadata.state_trackers.csr_tracker.iter())
+        .map(|(arch, csr)| CoreStateRef {
+            arch_int_reg_state: arch,
+            csr_state: csr,
+        })
+        .collect::<Vec<_>>();
 
-    for id in corpus.ids() {
-        let testcase = corpus.get(id)?.borrow();
+    for id in corpus.ids().collect::<Vec<_>>() {
+        let mut testcase = corpus.remove(id)?;
 
-        let passed = testcase.metadata::<PassedMetadata>()?.is_passed;
-        let cover = testcase.metadata::<CoveragesMetadata>()?;
-        let tracker = testcase.metadata::<StateTrackersMetadata>()?;
+        let passed = testcase
+            .remove_metadata::<PassedMetadata>()
+            .ok_or_else(|| format!("{} not found", type_name::<PassedMetadata>()))?
+            .is_passed;
 
         if !passed {
             continue;
         }
 
+        let cover = *testcase
+            .remove_metadata::<CoveragesMetadata>()
+            .ok_or_else(|| format!("{} not found", type_name::<CoveragesMetadata>()))?;
+        let tracker = *testcase
+            .remove_metadata::<StateTrackersMetadata>()
+            .ok_or_else(|| format!("{} not found", type_name::<StateTrackersMetadata>()))?;
+
         let metadata = CaseMetadata {
-            covers: cover.covers.clone(),
-            state_trackers: tracker.trackers.clone(),
+            covers: cover.covers,
+            state_trackers: tracker.trackers,
             is_passed: passed,
         };
 
-        let cover_distance = init_metadata
-            .covers
-            .names()
+        let cover_distance = init_metadata_coverd_counts
             .iter()
-            .map(|cov_name| {
-                let init_counts = init_metadata.covers.get(cov_name).covered_counts();
+            .map(|(cov_name, cov_len, init_counts)| {
                 let metadata_counts = metadata.covers.get(cov_name).covered_counts();
-                let dis = euclidean_distance(&init_counts, &metadata_counts)
-                    / (init_metadata.covers.get(cov_name).len() as f64).sqrt();
+                let dis =
+                    euclidean_distance(&init_counts, &metadata_counts) / (*cov_len as f64).sqrt();
                 dis
             })
             .sum::<f64>()
-            / init_metadata.covers.names().len() as f64;
+            / init_metadata_coverd_counts.len() as f64;
 
         let state_distance = fastdtw_distance(
-            &init_metadata
-                .state_trackers
-                .arch_int_reg_tracker
-                .iter()
-                .zip(init_metadata.state_trackers.csr_tracker.iter())
-                .map(|(arch, csr)| CoreState {
-                    arch_int_reg_state: arch.clone(),
-                    csr_state: csr.clone(),
-                })
-                .collect::<Vec<CoreState>>(),
+            &init_metadata_core_state,
             &metadata
                 .state_trackers
                 .arch_int_reg_tracker
                 .iter()
                 .zip(metadata.state_trackers.csr_tracker.iter())
-                .map(|(arch, csr)| CoreState {
-                    arch_int_reg_state: arch.clone(),
-                    csr_state: csr.clone(),
+                .map(|(arch, csr)| CoreStateRef {
+                    arch_int_reg_state: arch,
+                    csr_state: csr,
                 })
-                .collect::<Vec<CoreState>>(),
+                .collect::<Vec<_>>(),
             10,
         );
 
         log::info!(
-            "cover_distance: {}, state_distance: {}",
+            "Corpus testcase {id}: cover_distance {}, state_distance {}",
             cover_distance,
             state_distance
         );
@@ -121,11 +135,6 @@ fn emit_top_passed_testcases(
         limit
     );
 
-    // for (id, input, metadata, distance) in passed_cases.iter() {
-    //     let filename = format!("id_{:04}_dst_{:.6}", id, distance);
-    //     monitor::store_testcase(input, Some(metadata), &"debug2".to_string(), Some(filename));
-    // }
-
     let top_passed_cases: Vec<_> = passed_cases.into_iter().take(limit).collect();
     for (rank, (id, input, metadata, distance)) in top_passed_cases.iter().enumerate() {
         log::info!(
@@ -137,7 +146,12 @@ fn emit_top_passed_testcases(
 
         if let Some(output_dir) = &output {
             let filename = format!("rank_{:04}_id_{}_dst_{:.6}", rank + 1, id, distance);
-            store_testcase(input, Some(metadata), output_dir, Some(&filename))?;
+            store_testcase(
+                input,
+                save_trace.then(|| metadata),
+                output_dir,
+                Some(&filename),
+            )?;
         }
     }
 
@@ -152,8 +166,10 @@ fn emit_top_passed_testcases(
 pub(crate) fn run_fuzzer(
     max_iters: u64,
     max_run_timeout: u64,
+    tracker_window_size: u64,
     mutator_window_size: u64,
     top_n: u64,
+    save_trace: bool,
     init_case: &BytesInput,
     output: &Option<String>,
 ) -> Result<Vec<CaseMetadata>, Box<dyn std::error::Error>> {
@@ -161,8 +177,9 @@ pub(crate) fn run_fuzzer(
     let scheduler = QueueScheduler::new();
 
     let coverages_observer = unsafe { CoveragesObserver::from_raw("coverages", &coverages()) };
-    let statetrackers_observer =
-        unsafe { StateTrackersObserver::from_raw("state_trackers", &trackers()) };
+    let statetrackers_observer = unsafe {
+        StateTrackersObserver::from_raw("state_trackers", &trackers(), tracker_window_size)
+    };
 
     let mut feedback = feedback_and!(
         PassedFeedback::new(),
@@ -178,7 +195,6 @@ pub(crate) fn run_fuzzer(
         StdRand::with_seed(current_nanos()),
         InMemoryCorpus::new(),
         InMemoryCorpus::new(),
-        // OnDiskCorpus::new(PathBuf::from("./crashes")).unwrap(),
         &mut feedback,
         &mut objective,
     )
@@ -229,13 +245,13 @@ pub(crate) fn run_fuzzer(
     if let Some(output_dir) = output.as_ref() {
         store_testcase(
             init_case,
-            Some(&init_metadata),
+            save_trace.then(|| &init_metadata),
             output_dir,
             Some("init_case"),
         )?;
     }
 
-    let max_inst = init_metadata.state_trackers.len();
+    let max_inst = trackers().len();
     SIM_ARGS
         .get()
         .unwrap()
@@ -285,5 +301,5 @@ pub(crate) fn run_fuzzer(
         }
     }
 
-    emit_top_passed_testcases(&state, init_metadata, top_n, output)
+    emit_top_passed_testcases(state, init_metadata, top_n, save_trace, output)
 }

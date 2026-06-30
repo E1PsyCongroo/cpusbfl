@@ -22,14 +22,13 @@ where
     dist_sq.sqrt()
 }
 
-#[repr(C)]
-#[derive(Copy, Clone, Default, Debug, Eq, PartialEq)]
-pub(crate) struct CoreState {
-    pub csr_state: CSRState,
-    pub arch_int_reg_state: ArchIntRegState,
+#[derive(Clone, Copy)]
+pub(crate) struct CoreStateRef<'a> {
+    pub arch_int_reg_state: &'a ArchIntRegState,
+    pub csr_state: &'a CSRState,
 }
 
-impl Distance for CoreState {
+impl<'a> Distance for CoreStateRef<'a> {
     type Output = f64;
 
     fn distance(&self, other: &Self) -> Self::Output {
@@ -38,13 +37,13 @@ impl Distance for CoreState {
     }
 }
 
-impl Midpoint for CoreState {
+impl<'a> Midpoint for CoreStateRef<'a> {
     fn midpoint(&self, _other: &Self) -> Self {
         self.clone()
     }
 }
 
-pub(crate) fn fastdtw_distance(a: &[CoreState], b: &[CoreState], radius: usize) -> f64 {
+pub(crate) fn fastdtw_distance(a: &[CoreStateRef], b: &[CoreStateRef], radius: usize) -> f64 {
     let solution = fastdtw(a, b, radius);
     let path_len = solution.path().len().max(1) as f64;
     solution.distance() / path_len

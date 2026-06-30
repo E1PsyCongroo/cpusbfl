@@ -1,8 +1,10 @@
 use std::{
     cmp::max,
+    collections::HashSet,
     ffi::{CString, c_void},
     fmt::{self, Debug, Display, Formatter},
     hash::{Hash, Hasher},
+    ops::RangeBounds,
     panic,
     sync::{Mutex, OnceLock},
 };
@@ -294,6 +296,13 @@ where
         }
     }
 
+    pub fn drain<R>(&mut self, range: R) -> std::vec::Drain<'_, T>
+    where
+        R: RangeBounds<usize>,
+    {
+        self.tracker.drain(range)
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         self.tracker.iter()
     }
@@ -347,6 +356,19 @@ where
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.tracker.hash(state);
     }
+}
+
+pub fn first_dynamic_entries(pc_trace: &StateTracker<PCState>) -> Vec<(usize, u64)> {
+    let mut seen = HashSet::new();
+    let mut entries = Vec::new();
+
+    for (idx, state) in pc_trace.iter().enumerate() {
+        if seen.insert(state.value) {
+            entries.push((idx, state.value));
+        }
+    }
+
+    entries
 }
 
 #[derive(Clone, Default, Debug, Eq, PartialEq, Deserialize, Serialize)]
