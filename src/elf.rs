@@ -1,9 +1,6 @@
 use std;
 
-use lief::{
-    self,
-    generic::{Binary, Section},
-};
+use lief::generic::Section;
 use ouroboros::self_referencing;
 use tempfile::NamedTempFile;
 
@@ -17,6 +14,16 @@ pub(crate) fn section_contains_range(
     };
 
     section.virtual_address() <= vma_start && vma_end <= section_end
+}
+
+pub(crate) fn section_vma2offset(
+    section: &lief::elf::Section,
+    vma_start: u64,
+    vma_end: u64,
+) -> Option<u64> {
+    section_contains_range(section, vma_start, vma_end)
+        .then(|| vma_start.checked_sub(section.virtual_address()))?
+        .and_then(|offset| section.file_offset().checked_add(offset))
 }
 
 fn align_up(value: u64, align: u64) -> Result<u64, Box<dyn std::error::Error>> {
@@ -58,6 +65,10 @@ pub(crate) struct ELFParser {
 
     #[borrows(elf)]
     #[covariant]
+    pub text_section: Option<lief::elf::Section<'this>>,
+
+    #[borrows(elf)]
+    #[covariant]
     pub load_segments: Vec<lief::elf::Segment<'this>>,
 }
 
@@ -73,6 +84,7 @@ impl From<lief::elf::Binary> for ELFParser {
                     })
                     .collect()
             },
+            text_section_builder: |elf| elf.section_by_name(".text"),
             load_segments_builder: |elf| {
                 elf.segments()
                     .filter(|s| matches!(s.p_type(), lief::elf::segment::Type::LOAD))
@@ -121,7 +133,7 @@ impl ELFParser {
         let section = self.section_containing_vma(vma_start, vma_end)?;
         vma_start
             .checked_sub(section.virtual_address())?
-            .checked_add(section.offset())
+            .checked_add(section.file_offset())
     }
 
     pub fn find_insert_vaddr(
@@ -187,8 +199,8 @@ impl ELFParser {
                     section.name(),
                     section.virtual_address(),
                     section.virtual_address() + section.size(),
-                    section.offset(),
-                    section.offset() + section.size(),
+                    section.file_offset(),
+                    section.file_offset() + section.size(),
                 )
                 .into());
         }

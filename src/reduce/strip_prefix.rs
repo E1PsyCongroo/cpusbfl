@@ -1,13 +1,13 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use libafl::prelude::*;
 
-use crate::inst::*;
 use crate::elf::*;
+use crate::inst::*;
 use crate::reduce::*;
 use crate::state_tracker::*;
 
-const MIN_RESTORE_CONTEXTS: usize = 10;
+const SKIP_START_INST_NUM: usize = 20;
 const CODE_SEGMENT_ALIGN: u64 = 0x1000;
 const DEFAULT_SCRATCH_REG1: u8 = 1;
 const DEFAULT_SCRATCH_REG2: u8 = 2;
@@ -16,20 +16,11 @@ const DEFAULT_SCRATCH_REG2: u8 = 2;
 struct ContextRestorePlan {
     regs: Vec<(u8, u64)>,
     csrs: Vec<(u16, u64)>,
-    memory_writes: Vec<MemoryWrite>,
+    memory_bytes: Vec<MemoryByte>,
     target_privilege: u64,
     privilege_changed: bool,
     mstatus: u64,
     scratches: [(u8, u64); 2],
-}
-
-impl ContextRestorePlan {
-    fn len(&self) -> usize {
-        self.regs.len()
-            + self.csrs.len()
-            + self.memory_writes.len()
-            + usize::from(self.privilege_changed)
-    }
 }
 
 fn mstatus_with_mpp(mstatus: u64, privilege_mode: u64) -> u64 {
@@ -41,35 +32,83 @@ fn mstatus_with_mpp(mstatus: u64, privilege_mode: u64) -> u64 {
     (mstatus & !(0b11 << 11)) | (mpp << 11)
 }
 
-fn collect_memory_writes(
+fn instruction_offset(elf_parser: &ELFParser, pc: u64) -> Option<usize> {
+    usize::try_from(elf_parser.vma2offset(pc, pc.checked_add(COMPRESSED_INST_BYTES as u64)?)?).ok()
+}
+
+fn write_bytes(memory: &mut BTreeMap<u64, u8>, write: MemoryWrite) {
+    for offset in 0..write.access.bytes() {
+        memory.insert(
+            write.access.addr.wrapping_add(offset),
+            (write.value >> (offset * 8)) as u8,
+        );
+    }
+}
+
+fn collect_memory_bytes(
     input: &[u8],
     elf_parser: &ELFParser,
     original: &StateTrackers,
     candidate_idx: usize,
-) -> Option<Vec<MemoryWrite>> {
+) -> Option<Vec<MemoryByte>> {
     let pc_trace = original.pc_tracker.as_slice();
     let arch_trace = original.arch_int_reg_tracker.as_slice();
-    let mut writes = Vec::new();
+    let mut memory = BTreeMap::new();
 
     // Trace entry N is the state before instruction N. Replaying the skipped
     // prefix therefore includes instructions 0..N, excluding N itself.
     for idx in 0..candidate_idx {
         let pc = pc_trace.get(idx)?.value;
         let regs = &arch_trace.get(idx)?.value;
-        let offset = usize::try_from(elf_parser.vma2offset(
-            pc,
-            pc.checked_add(COMPRESSED_INST_BYTES as u64)?,
-        )?)
-        .ok()?;
+        let offset = instruction_offset(elf_parser, pc)?;
 
         match decode_memory_write_at(input, offset, regs) {
             MemoryWriteDecode::NotStore => {}
-            MemoryWriteDecode::Write(write) => writes.push(write),
+            MemoryWriteDecode::Write(write) => write_bytes(&mut memory, write),
             MemoryWriteDecode::Unsupported => return None,
         }
     }
 
-    Some(writes)
+    if memory.is_empty() {
+        return Some(Vec::new());
+    }
+
+    let mut needed = BTreeMap::new();
+    for idx in candidate_idx..pc_trace.len() {
+        let pc = pc_trace.get(idx)?.value;
+        let regs = &arch_trace.get(idx)?.value;
+        let offset = instruction_offset(elf_parser, pc)?;
+
+        match decode_memory_read_at(input, offset, regs) {
+            MemoryReadDecode::NotLoad => {}
+            MemoryReadDecode::Read(read) => {
+                for byte_offset in 0..read.bytes() {
+                    let addr = read.addr.wrapping_add(byte_offset);
+                    if let Some(value) = memory.remove(&addr) {
+                        needed.insert(addr, value);
+                    }
+                }
+            }
+            MemoryReadDecode::Unsupported => return None,
+        }
+
+        match decode_memory_write_at(input, offset, regs) {
+            MemoryWriteDecode::NotStore => {}
+            MemoryWriteDecode::Write(write) => {
+                for byte_offset in 0..write.access.bytes() {
+                    memory.remove(&write.access.addr.wrapping_add(byte_offset));
+                }
+            }
+            MemoryWriteDecode::Unsupported => return None,
+        }
+    }
+
+    Some(
+        needed
+            .into_iter()
+            .map(|(addr, value)| MemoryByte { addr, value })
+            .collect(),
+    )
 }
 
 fn collect_context_restore_plan(
@@ -157,7 +196,7 @@ fn collect_context_restore_plan(
     Some(ContextRestorePlan {
         regs,
         csrs,
-        memory_writes: collect_memory_writes(input, elf_parser, original, candidate_idx)?,
+        memory_bytes: collect_memory_bytes(input, elf_parser, original, candidate_idx)?,
         target_privilege: csr.privilege_mode,
         privilege_changed,
         mstatus: csr.mstatus,
@@ -165,54 +204,50 @@ fn collect_context_restore_plan(
     })
 }
 
-fn nop_skipped_prefix_insts(
-    bytes: &mut [u8],
-    input: &[u8],
-    elf_parser: &ELFParser,
-    original: &StateTrackers,
-    candidate_idx: usize,
-    entry_range: std::ops::Range<usize>,
-) -> Option<()> {
-    let pc_trace = original.pc_tracker.as_slice();
-    let suffix_pcs = pc_trace[candidate_idx..]
-        .iter()
-        .map(|state| state.value)
-        .collect::<HashSet<_>>();
-    let mut nopped = HashSet::new();
+// fn nop_skipped_prefix_insts(
+//     bytes: &mut [u8],
+//     input: &[u8],
+//     elf_parser: &ELFParser,
+//     original: &StateTrackers,
+//     candidate_idx: usize,
+//     entry_range: std::ops::Range<usize>,
+// ) -> Option<()> {
+//     let pc_trace = original.pc_tracker.as_slice();
+//     let suffix_pcs = pc_trace[candidate_idx..]
+//         .iter()
+//         .map(|state| state.value)
+//         .collect::<HashSet<_>>();
+//     let mut nopped = HashSet::new();
 
-    for state in &pc_trace[..candidate_idx] {
-        if suffix_pcs.contains(&state.value) {
-            continue;
-        }
+//     for state in &pc_trace[..candidate_idx] {
+//         if suffix_pcs.contains(&state.value) {
+//             continue;
+//         }
 
-        let offset = usize::try_from(
-            elf_parser.vma2offset(
-                state.value,
-                state
-                    .value
-                    .checked_add(STANDARD_INST_BYTES as u64)?,
-            )?,
-        )
-        .ok()?;
-        if entry_range.contains(&offset) || !nopped.insert(offset) {
-            continue;
-        }
+//         let offset = usize::try_from(elf_parser.vma2offset(
+//             state.value,
+//             state.value.checked_add(STANDARD_INST_BYTES as u64)?,
+//         )?)
+//         .ok()?;
+//         if entry_range.contains(&offset) || !nopped.insert(offset) {
+//             continue;
+//         }
 
-        let inst_len = inst_len_at(input, offset);
-        let end = offset.checked_add(inst_len)?;
-        if end > bytes.len() {
-            return None;
-        }
+//         let inst_len = inst_len_at(input, offset);
+//         let end = offset.checked_add(inst_len)?;
+//         if end > bytes.len() {
+//             return None;
+//         }
 
-        match inst_len {
-            2 => bytes[offset..end].copy_from_slice(&C_NOP),
-            4 => bytes[offset..end].copy_from_slice(&NOP),
-            _ => panic!("instruction length must be 2 or 4 bytes"),
-        }
-    }
+//         match inst_len {
+//             2 => bytes[offset..end].copy_from_slice(&C_NOP),
+//             4 => bytes[offset..end].copy_from_slice(&NOP),
+//             _ => panic!("instruction length must be 2 or 4 bytes"),
+//         }
+//     }
 
-    Some(())
-}
+//     Some(())
+// }
 
 fn append_context_restore(
     output: &mut Vec<u8>,
@@ -265,7 +300,7 @@ fn append_context_restore(
         append_inst_count += 1;
     }
 
-    append_inst_count += append_memory_restore(output, &plan.memory_writes, addr_reg, value_reg);
+    append_inst_count += append_memory_restore(output, &plan.memory_bytes, addr_reg, value_reg);
 
     for &(reg, value) in plan
         .regs
@@ -295,30 +330,33 @@ fn try_strip_prefix_at(
 ) -> Option<(BytesInput, StateTrackers)> {
     let entry_pc = original.pc_tracker.as_slice().first()?.value;
     let restore_plan = collect_context_restore_plan(original, input, elf_parser, candidate_idx)?;
-    if restore_plan.len() < MIN_RESTORE_CONTEXTS {
-        return None;
-    }
 
     let mut context_pc = elf_parser
-        .find_insert_vaddr(
-            u64::try_from(MIN_RESTORE_CONTEXTS).ok()? * 4,
-            CODE_SEGMENT_ALIGN,
-        )
+        .find_insert_vaddr(candidate_pc.abs_diff(entry_pc), CODE_SEGMENT_ALIGN)
         .ok()?;
     let mut context_code = Vec::new();
     let mut context_inst_count =
         append_context_restore(&mut context_code, context_pc, &restore_plan, candidate_pc)?;
+    let mut converged = false;
     for _ in 0..4 {
         let next_context_pc = elf_parser
             .find_insert_vaddr(u64::try_from(context_code.len()).ok()?, CODE_SEGMENT_ALIGN)
             .ok()?;
         if next_context_pc == context_pc {
+            converged = true;
             break;
         }
         context_code.clear();
         context_inst_count =
             append_context_restore(&mut context_code, context_pc, &restore_plan, candidate_pc)?;
         context_pc = next_context_pc;
+    }
+    if !converged {
+        log::debug!(
+            "Failed to converge context restore code placement, candidate_pc={:#x}",
+            candidate_pc
+        );
+        return None;
     }
 
     let entry_jmp = encode_jmp(
@@ -338,14 +376,14 @@ fn try_strip_prefix_at(
     bytes
         .get_mut(entry_offset..entry_end)?
         .copy_from_slice(&entry_jmp);
-    nop_skipped_prefix_insts(
-        &mut bytes,
-        input,
-        elf_parser,
-        original,
-        candidate_idx,
-        entry_offset..entry_end,
-    )?;
+    // nop_skipped_prefix_insts(
+    //     &mut bytes,
+    //     input,
+    //     elf_parser,
+    //     original,
+    //     candidate_idx,
+    //     entry_offset..entry_end,
+    // )?;
 
     let bytes = ELFParser::from_bytes(&bytes)
         .ok()?
@@ -361,7 +399,23 @@ fn try_strip_prefix_at(
         + usize::try_from(context_inst_count).ok()?
         + suffix_inst_count;
 
-    validate_exact_trace(BytesInput::from(bytes), original, max_inst)
+    log::debug!(
+        "Prefix-reduced candidate: entry_pc={:#x}, context_pc={:#x}, candidate_pc={:#x}, \
+         prefix_inst_count={}, context_inst_count={}, suffix_inst_count={}, max_inst={}",
+        entry_pc,
+        context_pc,
+        candidate_pc,
+        candidate_idx,
+        context_inst_count,
+        suffix_inst_count,
+        max_inst
+    );
+
+    let bytes = BytesInput::from(bytes);
+    // let filename = format!("prefix_{candidate_idx}");
+    // store_testcase(&bytes, None, "reduce", Some(&filename)).unwrap();
+
+    validate_exact_trace(bytes, original, max_inst)
 }
 
 pub fn strip_irrelevant_prefix(
@@ -374,18 +428,24 @@ pub fn strip_irrelevant_prefix(
     let elf_parser = ELFParser::from_bytes(input)
         .inspect_err(|err| log::warn!("Failed to parse ELF for strip prefix reduction: {err}"))
         .ok()?;
-    let entry_pc = pc_trace.as_slice().first()?.value;
-    let candidates: Vec<(usize, u64)> = first_dynamic_entries(pc_trace)
-        .into_iter()
-        .filter(|&(idx, pc)| idx > MIN_RESTORE_CONTEXTS && pc != entry_pc)
-        .filter(|&(idx, _)| {
-            collect_context_restore_plan(original, input, &elf_parser, idx)
-                .is_some_and(|plan| plan.len() >= MIN_RESTORE_CONTEXTS)
-        })
+    let candidates: Vec<(usize, u64)> = pc_trace
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, pc)| (idx >= SKIP_START_INST_NUM).then(|| (idx, pc.value)))
         .collect();
 
+    if let Some((candidate, trackers)) = try_strip_prefix_at(
+        input,
+        &elf_parser,
+        candidates.last()?.0,
+        candidates.last()?.1,
+        original,
+    ) {
+        return Some((candidate, trackers));
+    };
+
     let mut low = 0usize;
-    let mut high = candidates.len();
+    let mut high = candidates.len() - 1;
     let mut best = None;
 
     while low < high {
@@ -395,9 +455,17 @@ pub fn strip_irrelevant_prefix(
             Some((candidate, trackers)) => {
                 best = Some((candidate, trackers));
                 low = mid + 1;
+                log::debug!(
+                    "Found prefix-reduced candidate at index {candidate_idx}, pc={:#x}",
+                    candidate_pc
+                );
             }
             None => {
                 high = mid;
+                log::debug!(
+                    "Failed to reduce prefix at index {candidate_idx}, pc={:#x}",
+                    candidate_pc
+                );
             }
         }
     }

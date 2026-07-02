@@ -3,8 +3,6 @@ mod strip_prefix;
 mod strip_suffix;
 mod trim;
 
-use std::collections::HashSet;
-
 use libafl::prelude::*;
 
 use crate::elf::*;
@@ -44,7 +42,6 @@ fn is_same_failure_site(
     candidate_pc == original_pc
 }
 
-
 fn validate_exact_trace(
     input: BytesInput,
     original: &StateTrackers,
@@ -78,8 +75,66 @@ pub(crate) fn reduce_fault_case(
         .map(BytesInput::from)
         .unwrap_or(input);
 
+    let (stripped_prefix_bytes, stripped_prefix_trackers) =
+        match strip_irrelevant_prefix(stripped_input.mutator_bytes(), &original) {
+            Some((bytes, trackers)) => {
+                log::info!("Strip irrelevant prefix insts successed");
+                if save_reduce && output_dir.is_some() {
+                    store_testcase(
+                        &bytes,
+                        None,
+                        output_dir.unwrap(),
+                        Some("init_striped_prefix"),
+                    )
+                    .unwrap();
+                }
+                (bytes, trackers)
+            }
+            None => {
+                log::info!("Strip irrelevant prefix insts failed, skipping");
+                (stripped_input, original.to_owned())
+            }
+        };
+
+    let (stripped_suffix_bytes, stripped_suffix_trackers) = match strip_irrelevant_suffix(
+        stripped_prefix_bytes.mutator_bytes(),
+        &stripped_prefix_trackers,
+    ) {
+        Some((bytes, trackers)) => {
+            log::info!("Strip irrelevant suffix insts successed");
+            if save_reduce && output_dir.is_some() {
+                store_testcase(
+                    &bytes,
+                    None,
+                    output_dir.unwrap(),
+                    Some("init_striped_suffix"),
+                )
+                .unwrap();
+            }
+            (bytes, trackers)
+        }
+        None => {
+            log::info!("Strip irrelevant suffix insts failed, skipping");
+            (stripped_prefix_bytes, stripped_prefix_trackers)
+        }
+    };
+
+    // let (trimmed_bytes, trimmed_trackers) = match trim_after_max_pc(
+    //     stripped_suffix_bytes.mutator_bytes(),
+    //     &stripped_suffix_trackers,
+    // ) {
+    //     Some((bytes, trackers)) => {
+    //         log::info!("Trim case after max pc successed");
+    //         if save_reduce && output_dir.is_some() {
+    //             store_testcase(&bytes, None, output_dir.unwrap(), Some("init_trimmed")).unwrap();
+    //         }
+    //         (bytes, trackers)
+    //     }
+    //     None => (stripped_suffix_bytes, stripped_suffix_trackers),
+    // };
+
     let (nopped_bytes, nopped_trackers) =
-        match nop_unexecuted_insts(stripped_input.mutator_bytes(), &original) {
+        match nop_unexecuted_insts(stripped_suffix_bytes.mutator_bytes(), &original) {
             Some((bytes, trackers)) => {
                 log::info!("Nop unexecuted insts successed");
                 if save_reduce && output_dir.is_some() {
@@ -87,58 +142,11 @@ pub(crate) fn reduce_fault_case(
                 }
                 (bytes, trackers)
             }
-            None => (stripped_input, original.to_owned()),
+            None => {
+                log::info!("Nop unexecuted insts failed, skipping");
+                (stripped_suffix_bytes, stripped_suffix_trackers)
+            }
         };
 
-    let (striped_suffix_bytes, striped_suffix_trackers) =
-        match strip_irrelevant_suffix(nopped_bytes.mutator_bytes(), &nopped_trackers) {
-            Some((bytes, trackers)) => {
-                log::info!("Strip irrelevant suffix insts successed");
-                if save_reduce && output_dir.is_some() {
-                    store_testcase(
-                        &bytes,
-                        None,
-                        output_dir.unwrap(),
-                        Some("init_striped_suffix"),
-                    )
-                    .unwrap();
-                }
-                (bytes, trackers)
-            }
-            None => (nopped_bytes.to_owned(), nopped_trackers.to_owned()),
-        };
-
-    let (trimmed_bytes, trimmed_trackers) = match trim_after_max_pc(
-        striped_suffix_bytes.mutator_bytes(),
-        &striped_suffix_trackers,
-    ) {
-        Some((bytes, trackers)) => {
-            log::info!("Trim case after max pc successed");
-            if save_reduce && output_dir.is_some() {
-                store_testcase(&bytes, None, output_dir.unwrap(), Some("init_trimmed")).unwrap();
-            }
-            (bytes, trackers)
-        }
-        None => (
-            striped_suffix_bytes.to_owned(),
-            striped_suffix_trackers.to_owned(),
-        ),
-    };
-
-    match strip_irrelevant_prefix(trimmed_bytes.mutator_bytes(), &trimmed_trackers) {
-        Some((bytes, _)) => {
-            log::info!("Strip irrelevant prefix insts successed");
-            if save_reduce && output_dir.is_some() {
-                store_testcase(
-                    &bytes,
-                    None,
-                    output_dir.unwrap(),
-                    Some("init_striped_prefix"),
-                )
-                .unwrap();
-            }
-            bytes
-        }
-        None => trimmed_bytes,
-    }
+    nopped_bytes
 }

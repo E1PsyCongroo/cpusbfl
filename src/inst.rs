@@ -4,6 +4,7 @@ const AUIPC_OPCODE: u32 = 0x17;
 const JAL_OPCODE: u32 = 0x6f;
 const JALR_OPCODE: u32 = 0x67;
 const LUI_OPCODE: u32 = 0x37;
+const LOAD_OPCODE: u32 = 0x03;
 const AMO_OPCODE: u32 = 0x2f;
 const STORE_OPCODE: u32 = 0x23;
 const SYSTEM_OPCODE: u32 = 0x73;
@@ -47,6 +48,13 @@ const FUNCT3_ADDI: u32 = 0b000;
 const FUNCT3_SLLI: u32 = 0b001;
 const FUNCT3_JALR: u32 = 0b000;
 const FUNCT3_CSRRW: u32 = 0b001;
+const FUNCT3_LOAD_BYTE: u32 = 0b000;
+const FUNCT3_LOAD_HALF: u32 = 0b001;
+const FUNCT3_LOAD_WORD: u32 = 0b010;
+const FUNCT3_LOAD_DOUBLE: u32 = 0b011;
+const FUNCT3_LOAD_BYTE_UNSIGNED: u32 = 0b100;
+const FUNCT3_LOAD_HALF_UNSIGNED: u32 = 0b101;
+const FUNCT3_LOAD_WORD_UNSIGNED: u32 = 0b110;
 const FUNCT3_STORE_BYTE: u32 = 0b000;
 const FUNCT3_STORE_HALF: u32 = 0b001;
 const FUNCT3_STORE_WORD: u32 = 0b010;
@@ -65,6 +73,10 @@ const AUIPC_IMM_MAX: i32 = (1 << 19) - 1;
 const UIMM20_MASK: u32 = (1 << 20) - 1;
 
 const RVC_SP_STORE_MASK: u16 = 0xe003;
+const RVC_C_LW_MATCH: u16 = 0x4000;
+const RVC_C_LD_MATCH: u16 = 0x6000;
+const RVC_C_LWSP_MATCH: u16 = 0x4002;
+const RVC_C_LDSP_MATCH: u16 = 0x6002;
 const RVC_C_SW_MATCH: u16 = 0xc000;
 const RVC_C_SD_MATCH: u16 = 0xe000;
 const RVC_C_SWSP_MATCH: u16 = 0xc002;
@@ -81,27 +93,6 @@ const AMO_FUNCT5_MIN: u32 = 0b10000;
 const AMO_FUNCT5_MAX: u32 = 0b10100;
 const AMO_FUNCT5_MINU: u32 = 0b11000;
 const AMO_FUNCT5_MAXU: u32 = 0b11100;
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct MemoryWrite {
-    addr: u64,
-    value: u64,
-    width: StoreWidth,
-}
-
-#[derive(Clone, Copy, Debug)]
-enum StoreWidth {
-    Byte,
-    Half,
-    Word,
-    Double,
-}
-
-pub(crate) enum MemoryWriteDecode {
-    NotStore,
-    Write(MemoryWrite),
-    Unsupported,
-}
 
 fn riscv_inst_len(first_halfword: u16) -> usize {
     if first_halfword & INST_LEN_TAG_MASK == STANDARD_INST_LEN_TAG {
@@ -262,26 +253,6 @@ pub(crate) fn append_write_csr(output: &mut Vec<u8>, csr: u16, value: u64, scrat
     append_inst_count + 1
 }
 
-pub(crate) fn append_memory_restore(
-    output: &mut Vec<u8>,
-    memory_writes: &[MemoryWrite],
-    addr_reg: u8,
-    value_reg: u8,
-) -> u64 {
-    let mut append_inst_count = 0;
-    for write in memory_writes {
-        append_inst_count += append_load_u64(output, addr_reg, write.addr);
-        append_inst_count += append_load_u64(output, value_reg, write.value);
-        push_inst(
-            output,
-            encode_store(addr_reg, value_reg, 0, write.width.store_funct3()),
-        );
-        append_inst_count += 1;
-    }
-
-    append_inst_count
-}
-
 fn jmp_reg(reg: Option<u64>) -> Option<u8> {
     let reg = reg.unwrap_or(1);
     if (1..=31).contains(&reg) {
@@ -326,29 +297,43 @@ pub(crate) fn encode_jmp(
     }
 }
 
-impl StoreWidth {
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct MemoryByte {
+    pub addr: u64,
+    pub value: u8,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum MemoryWidth {
+    Byte,
+    Half,
+    Word,
+    Double,
+}
+
+impl MemoryWidth {
     fn bytes(self) -> u64 {
         match self {
-            StoreWidth::Byte => 1,
-            StoreWidth::Half => 2,
-            StoreWidth::Word => 4,
-            StoreWidth::Double => 8,
+            MemoryWidth::Byte => 1,
+            MemoryWidth::Half => 2,
+            MemoryWidth::Word => 4,
+            MemoryWidth::Double => 8,
         }
     }
 
     fn mask(self) -> u64 {
         match self {
-            StoreWidth::Double => u64::MAX,
+            MemoryWidth::Double => u64::MAX,
             _ => (1 << (self.bytes() * 8)) - 1,
         }
     }
 
     fn store_funct3(self) -> u32 {
         match self {
-            StoreWidth::Byte => FUNCT3_STORE_BYTE,
-            StoreWidth::Half => FUNCT3_STORE_HALF,
-            StoreWidth::Word => FUNCT3_STORE_WORD,
-            StoreWidth::Double => FUNCT3_STORE_DOUBLE,
+            MemoryWidth::Byte => FUNCT3_STORE_BYTE,
+            MemoryWidth::Half => FUNCT3_STORE_HALF,
+            MemoryWidth::Word => FUNCT3_STORE_WORD,
+            MemoryWidth::Double => FUNCT3_STORE_DOUBLE,
         }
     }
 
@@ -357,15 +342,96 @@ impl StoreWidth {
     }
 }
 
-fn compressed_reg(reg: u16) -> usize {
-    (reg as usize) + 8
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct MemoryAccess {
+    pub addr: u64,
+    pub width: MemoryWidth,
 }
 
-fn memory_write(addr: u64, value: u64, width: StoreWidth) -> MemoryWrite {
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct MemoryWrite {
+    pub access: MemoryAccess,
+    pub value: u64,
+}
+
+pub(crate) enum MemoryWriteDecode {
+    NotStore,
+    Write(MemoryWrite),
+    Unsupported,
+}
+
+pub(crate) enum MemoryReadDecode {
+    NotLoad,
+    Read(MemoryAccess),
+    Unsupported,
+}
+
+impl MemoryAccess {
+    pub(crate) fn bytes(self) -> u64 {
+        self.width.bytes()
+    }
+}
+
+fn contiguous_bytes(memory_bytes: &[MemoryByte], start: u64, count: usize) -> bool {
+    memory_bytes.len() >= count
+        && memory_bytes[..count]
+            .iter()
+            .enumerate()
+            .all(|(offset, byte)| byte.addr == start.wrapping_add(offset as u64))
+}
+
+pub(crate) fn append_memory_restore(
+    output: &mut Vec<u8>,
+    memory_bytes: &[MemoryByte],
+    addr_reg: u8,
+    value_reg: u8,
+) -> u64 {
+    let mut append_inst_count = 0;
+    let mut idx = 0;
+    while idx < memory_bytes.len() {
+        let addr = memory_bytes[idx].addr;
+        let remaining = &memory_bytes[idx..];
+        // let width = if addr % 8 == 0 && contiguous_bytes(remaining, addr, 8) {
+        //     MemoryWidth::Double
+        // } else if addr % 4 == 0 && contiguous_bytes(remaining, addr, 4) {
+        //     MemoryWidth::Word
+        // } else if addr % 2 == 0 && contiguous_bytes(remaining, addr, 2) {
+        //     MemoryWidth::Half
+        // } else {
+        //     MemoryWidth::Byte
+        // };
+        let width = if addr % 4 == 0 && contiguous_bytes(remaining, addr, 4) {
+            MemoryWidth::Word
+        } else if addr % 2 == 0 && contiguous_bytes(remaining, addr, 2) {
+            MemoryWidth::Half
+        } else {
+            MemoryWidth::Byte
+        };
+        let width_bytes = width.bytes() as usize;
+        let value = remaining[..width_bytes]
+            .iter()
+            .enumerate()
+            .fold(0u64, |value, (offset, byte)| {
+                value | (u64::from(byte.value) << (offset * 8))
+            });
+
+        append_inst_count += append_load_u64(output, addr_reg, addr);
+        append_inst_count += append_load_u64(output, value_reg, value);
+        push_inst(
+            output,
+            encode_store(addr_reg, value_reg, 0, width.store_funct3()),
+        );
+        append_inst_count += 1;
+        idx += width_bytes;
+    }
+
+    append_inst_count
+}
+
+fn memory_write(addr: u64, value: u64, width: MemoryWidth) -> MemoryWrite {
     MemoryWrite {
-        addr,
+        access: MemoryAccess { addr, width },
         value: width.truncate(value),
-        width,
     }
 }
 
@@ -374,15 +440,36 @@ fn decode_s_type_imm(inst: u32) -> i64 {
     sign_extend(imm as u64, IMM12_BITS) as i64
 }
 
+fn decode_i_type_imm(inst: u32) -> i64 {
+    sign_extend(u64::from(inst >> 20), IMM12_BITS) as i64
+}
+
+fn decode_standard_load(inst: u32, regs: &[u64; REG_COUNT]) -> MemoryReadDecode {
+    if inst & 0x7f != LOAD_OPCODE {
+        return MemoryReadDecode::NotLoad;
+    }
+
+    let width = match inst >> 12 & 0x7 {
+        FUNCT3_LOAD_BYTE | FUNCT3_LOAD_BYTE_UNSIGNED => MemoryWidth::Byte,
+        FUNCT3_LOAD_HALF | FUNCT3_LOAD_HALF_UNSIGNED => MemoryWidth::Half,
+        FUNCT3_LOAD_WORD | FUNCT3_LOAD_WORD_UNSIGNED => MemoryWidth::Word,
+        FUNCT3_LOAD_DOUBLE => MemoryWidth::Double,
+        _ => return MemoryReadDecode::Unsupported,
+    };
+    let rs1 = inst >> 15 & 0x1f;
+    let addr = regs[rs1 as usize].wrapping_add(decode_i_type_imm(inst) as u64);
+    MemoryReadDecode::Read(MemoryAccess { addr, width })
+}
+
 fn decode_standard_store(inst: u32, regs: &[u64; REG_COUNT]) -> MemoryWriteDecode {
     let opcode = inst & 0x7f;
     if opcode == STORE_OPCODE {
         let funct3 = inst >> 12 & 0x7;
         let width = match funct3 {
-            FUNCT3_STORE_BYTE => StoreWidth::Byte,
-            FUNCT3_STORE_HALF => StoreWidth::Half,
-            FUNCT3_STORE_WORD => StoreWidth::Word,
-            FUNCT3_STORE_DOUBLE => StoreWidth::Double,
+            FUNCT3_STORE_BYTE => MemoryWidth::Byte,
+            FUNCT3_STORE_HALF => MemoryWidth::Half,
+            FUNCT3_STORE_WORD => MemoryWidth::Word,
+            FUNCT3_STORE_DOUBLE => MemoryWidth::Double,
             _ => return MemoryWriteDecode::Unsupported,
         };
         let rs1 = inst >> 15 & 0x1f;
@@ -398,11 +485,44 @@ fn decode_standard_store(inst: u32, regs: &[u64; REG_COUNT]) -> MemoryWriteDecod
     MemoryWriteDecode::NotStore
 }
 
+fn decode_atomic_memory_read(inst: u32, regs: &[u64; REG_COUNT]) -> MemoryReadDecode {
+    let width = match inst >> 12 & 0x7 {
+        FUNCT3_STORE_WORD => MemoryWidth::Word,
+        FUNCT3_STORE_DOUBLE => MemoryWidth::Double,
+        _ => return MemoryReadDecode::Unsupported,
+    };
+    let funct5 = inst >> 27 & 0x1f;
+    if funct5 == AMO_FUNCT5_SC {
+        return MemoryReadDecode::NotLoad;
+    }
+    if !matches!(
+        funct5,
+        AMO_FUNCT5_LR
+            | AMO_FUNCT5_SWAP
+            | AMO_FUNCT5_ADD
+            | AMO_FUNCT5_XOR
+            | AMO_FUNCT5_AND
+            | AMO_FUNCT5_OR
+            | AMO_FUNCT5_MIN
+            | AMO_FUNCT5_MAX
+            | AMO_FUNCT5_MINU
+            | AMO_FUNCT5_MAXU
+    ) {
+        return MemoryReadDecode::Unsupported;
+    }
+
+    let rs1 = inst >> 15 & 0x1f;
+    MemoryReadDecode::Read(MemoryAccess {
+        addr: regs[rs1 as usize],
+        width,
+    })
+}
+
 fn decode_atomic_memory_write(inst: u32, regs: &[u64; REG_COUNT]) -> MemoryWriteDecode {
     let funct3 = inst >> 12 & 0x7;
     let width = match funct3 {
-        FUNCT3_STORE_WORD => StoreWidth::Word,
-        FUNCT3_STORE_DOUBLE => StoreWidth::Double,
+        FUNCT3_STORE_WORD => MemoryWidth::Word,
+        FUNCT3_STORE_DOUBLE => MemoryWidth::Double,
         _ => return MemoryWriteDecode::NotStore,
     };
     let rd = inst >> 7 & 0x1f;
@@ -447,7 +567,7 @@ fn decode_atomic_memory_write(inst: u32, regs: &[u64; REG_COUNT]) -> MemoryWrite
     MemoryWriteDecode::Write(memory_write(addr, value, width))
 }
 
-fn signed_min(lhs: u64, rhs: u64, width: StoreWidth) -> u64 {
+fn signed_min(lhs: u64, rhs: u64, width: MemoryWidth) -> u64 {
     let bits = (width.bytes() * 8) as u32;
     if sign_extend(lhs, bits) as i64 <= sign_extend(rhs, bits) as i64 {
         lhs
@@ -456,13 +576,17 @@ fn signed_min(lhs: u64, rhs: u64, width: StoreWidth) -> u64 {
     }
 }
 
-fn signed_max(lhs: u64, rhs: u64, width: StoreWidth) -> u64 {
+fn signed_max(lhs: u64, rhs: u64, width: MemoryWidth) -> u64 {
     let bits = (width.bytes() * 8) as u32;
     if sign_extend(lhs, bits) as i64 >= sign_extend(rhs, bits) as i64 {
         lhs
     } else {
         rhs
     }
+}
+
+fn compressed_reg(reg: u16) -> usize {
+    (reg as usize) + 8
 }
 
 fn decode_compressed_store(inst: u16, regs: &[u64; REG_COUNT]) -> MemoryWriteDecode {
@@ -473,29 +597,68 @@ fn decode_compressed_store(inst: u16, regs: &[u64; REG_COUNT]) -> MemoryWriteDec
             let imm =
                 ((inst >> 10) & 0x7) << 3 | ((inst >> 6) & 0x1) << 2 | ((inst >> 5) & 0x1) << 6;
             let addr = regs[rs1].wrapping_add(imm as u64);
-            MemoryWriteDecode::Write(memory_write(addr, regs[rs2], StoreWidth::Word))
+            MemoryWriteDecode::Write(memory_write(addr, regs[rs2], MemoryWidth::Word))
         }
         RVC_C_SD_MATCH => {
             let rs1 = compressed_reg(inst >> 7 & 0x7);
             let rs2 = compressed_reg(inst >> 2 & 0x7);
             let imm = ((inst >> 10) & 0x7) << 3 | ((inst >> 5) & 0x3) << 6;
             let addr = regs[rs1].wrapping_add(imm as u64);
-            MemoryWriteDecode::Write(memory_write(addr, regs[rs2], StoreWidth::Double))
+            MemoryWriteDecode::Write(memory_write(addr, regs[rs2], MemoryWidth::Double))
         }
         RVC_C_SWSP_MATCH => {
             let rs2 = (inst >> 2 & 0x1f) as usize;
             let imm = ((inst >> 9) & 0xf) << 2 | ((inst >> 7) & 0x3) << 6;
             let addr = regs[SP_REG].wrapping_add(imm as u64);
-            MemoryWriteDecode::Write(memory_write(addr, regs[rs2], StoreWidth::Word))
+            MemoryWriteDecode::Write(memory_write(addr, regs[rs2], MemoryWidth::Word))
         }
         RVC_C_SDSP_MATCH => {
             let rs2 = (inst >> 2 & 0x1f) as usize;
             let imm = ((inst >> 10) & 0x7) << 3 | ((inst >> 7) & 0x7) << 6;
             let addr = regs[SP_REG].wrapping_add(imm as u64);
-            MemoryWriteDecode::Write(memory_write(addr, regs[rs2], StoreWidth::Double))
+            MemoryWriteDecode::Write(memory_write(addr, regs[rs2], MemoryWidth::Double))
         }
         _ => MemoryWriteDecode::NotStore,
     }
+}
+
+fn decode_compressed_load(inst: u16, regs: &[u64; REG_COUNT]) -> MemoryReadDecode {
+    let (base, imm, width) = match inst & RVC_SP_STORE_MASK {
+        RVC_C_LW_MATCH => {
+            let rs1 = compressed_reg(inst >> 7 & 0x7);
+            let imm =
+                ((inst >> 10) & 0x7) << 3 | ((inst >> 6) & 0x1) << 2 | ((inst >> 5) & 0x1) << 6;
+            (regs[rs1], imm, MemoryWidth::Word)
+        }
+        RVC_C_LD_MATCH => {
+            let rs1 = compressed_reg(inst >> 7 & 0x7);
+            let imm = ((inst >> 10) & 0x7) << 3 | ((inst >> 5) & 0x3) << 6;
+            (regs[rs1], imm, MemoryWidth::Double)
+        }
+        RVC_C_LWSP_MATCH => {
+            let rd = inst >> 7 & 0x1f;
+            if rd == 0 {
+                return MemoryReadDecode::Unsupported;
+            }
+            let imm =
+                ((inst >> 12) & 0x1) << 5 | ((inst >> 4) & 0x7) << 2 | ((inst >> 2) & 0x3) << 6;
+            (regs[SP_REG], imm, MemoryWidth::Word)
+        }
+        RVC_C_LDSP_MATCH => {
+            let rd = inst >> 7 & 0x1f;
+            if rd == 0 {
+                return MemoryReadDecode::Unsupported;
+            }
+            let imm = ((inst >> 10) & 0x7) << 3 | ((inst >> 2) & 0x7) << 6;
+            (regs[SP_REG], imm, MemoryWidth::Double)
+        }
+        _ => return MemoryReadDecode::NotLoad,
+    };
+
+    MemoryReadDecode::Read(MemoryAccess {
+        addr: base.wrapping_add(u64::from(imm)),
+        width,
+    })
 }
 
 pub(crate) fn decode_memory_write_at(
@@ -516,6 +679,33 @@ pub(crate) fn decode_memory_write_at(
         COMPRESSED_INST_BYTES => {
             let inst = u16::from_le_bytes([input[offset], input[offset + 1]]);
             decode_compressed_store(inst, regs)
+        }
+        _ => panic!("instruction length must be 2 or 4 bytes"),
+    }
+}
+
+pub(crate) fn decode_memory_read_at(
+    input: &[u8],
+    offset: usize,
+    regs: &[u64; REG_COUNT],
+) -> MemoryReadDecode {
+    match inst_len_at(input, offset) {
+        STANDARD_INST_BYTES => {
+            let inst = u32::from_le_bytes([
+                input[offset],
+                input[offset + 1],
+                input[offset + 2],
+                input[offset + 3],
+            ]);
+            if inst & 0x7f == AMO_OPCODE {
+                decode_atomic_memory_read(inst, regs)
+            } else {
+                decode_standard_load(inst, regs)
+            }
+        }
+        COMPRESSED_INST_BYTES => {
+            let inst = u16::from_le_bytes([input[offset], input[offset + 1]]);
+            decode_compressed_load(inst, regs)
         }
         _ => panic!("instruction length must be 2 or 4 bytes"),
     }
