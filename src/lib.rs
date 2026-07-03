@@ -14,11 +14,7 @@ mod spectrum;
 mod state_tracker;
 mod utils;
 
-use std::fmt::Error;
-
 use clap::Parser;
-
-use crate::harness::SIM_ARGS;
 
 #[derive(Parser, Default, Debug)]
 struct Arguments {
@@ -29,6 +25,8 @@ struct Arguments {
     coverage: String,
     #[clap(default_value_t = String::from("PCState,ArchIntRegState,CSRState"), short, long)]
     state: String,
+    #[clap(default_value_t = false, long)]
+    base_mutator: bool,
     #[clap(default_value_t = false, short, long)]
     reduce: bool,
     #[clap(default_value_t = false, long)]
@@ -96,7 +94,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if !workloads.is_empty() {
         let workloads_display = workloads.join(", ");
-        let emu_args_display = SIM_ARGS
+        let emu_args_display = harness::SIM_ARGS
             .get()
             .unwrap()
             .lock()
@@ -138,6 +136,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
 
         fuzzer::run_fuzzer(
+            args.base_mutator,
             args.max_iters,
             args.max_run_timeout,
             args.tracker_window_size,

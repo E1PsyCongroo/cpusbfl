@@ -21,16 +21,20 @@ pub(crate) struct LastWindowMutator {
 }
 
 impl LastWindowMutator {
-    pub(crate) fn new(
-        elf_bytes: &[u8],
+    pub(crate) fn new<I>(
+        init_bytes: &I,
         pc_trace: &StateTracker<PCState>,
         window_size: u64,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ) -> Result<Self, Box<dyn std::error::Error>>
+    where
+        I: HasMutatorBytes,
+    {
         if window_size == 0 {
             return Err("window_size must be greater than 0".into());
         }
 
-        let elf_parser = ELFParser::from_bytes(elf_bytes)?;
+        let init_bytes = init_bytes.mutator_bytes();
+        let elf_parser = ELFParser::from_bytes(init_bytes)?;
 
         let trace = first_dynamic_entries(pc_trace)
             .into_iter()
@@ -47,20 +51,12 @@ impl LastWindowMutator {
         let mut candidates = Vec::new();
         let mut total_weight = 0u64;
 
-        for (idx_in_window, &pc_state) in window.iter().enumerate() {
-            let vma_start = pc_state;
-            let min_vma_end = vma_start + COMPRESSED_INST_BYTES as u64;
+        for (idx, &pc) in window.iter().enumerate() {
+            let offset = usize::try_from(elf_parser.vma2offset(pc)?)?;
 
-            let Some(offset) = elf_parser
-                .vma2offset(vma_start, min_vma_end)
-                .and_then(|offset_u64| usize::try_from(offset_u64).ok())
-            else {
-                continue;
-            };
+            let inst_len = inst_len_at(init_bytes, offset);
 
-            let inst_len = inst_len_at(elf_bytes, offset);
-
-            let rank = u64::try_from(idx_in_window + 1)?;
+            let rank = u64::try_from(idx + 1)?;
             let weight = rank
                 .checked_mul(rank)
                 .ok_or("LastWindowMutator weight overflow")?;

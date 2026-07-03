@@ -1,19 +1,63 @@
+use std::borrow::Cow;
 use std::{any::type_name, io::Write};
 
-use libafl::{
-    StdFuzzer, mutators::scheduled::SingleChoiceScheduledMutator as StdScheduledMutator,
-    prelude::*, schedulers::QueueScheduler, state::StdState,
-};
-use libafl_bolts::{current_nanos, rands::StdRand, tuples::tuple_list};
+use libafl::{StdFuzzer, prelude::*, schedulers::QueueScheduler, state::StdState};
+use libafl_bolts::{Named, current_nanos, rands::StdRand, tuples::tuple_list};
 
 use crate::coverage::*;
 use crate::feedback::{coverages_feedback::*, passed_feedback::*, statetrackers_feedback::*};
-use crate::harness::{self, SIM_ARGS};
-use crate::mutator::lastwindow_mutator::LastWindowMutator;
+use crate::harness::{SIM_ARGS, fuzz_harness};
+use crate::mutator::{
+    elf_scheduled::ELFHavocScheduledMutator, lastwindow_mutator::LastWindowMutator,
+};
 use crate::observer::{coverages_observer::*, statetrackers_observer::*};
 use crate::similarity::*;
 use crate::state_tracker::*;
-use crate::utils::{process_cpu_time_now, store_testcase};
+use crate::utils::*;
+
+#[derive(Debug)]
+enum SelectedMutator<MT> {
+    Elf(ELFHavocScheduledMutator<MT>),
+    Last(LastWindowMutator),
+}
+
+impl<MT> Named for SelectedMutator<MT> {
+    fn name(&self) -> &Cow<'static, str> {
+        match self {
+            SelectedMutator::Elf(m) => m.name(),
+            SelectedMutator::Last(m) => m.name(),
+        }
+    }
+}
+
+impl<I, MT, S> Mutator<I, S> for SelectedMutator<MT>
+where
+    I: HasMutatorBytes,
+    MT: MutatorsTuple<BytesInput, S>,
+    S: HasRand,
+    LastWindowMutator: Mutator<I, S>,
+{
+    #[inline]
+    fn mutate(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error> {
+        match self {
+            SelectedMutator::Elf(m) => m.mutate(state, input),
+            SelectedMutator::Last(m) => m.mutate(state, input),
+        }
+    }
+
+    #[inline]
+    fn post_exec(&mut self, state: &mut S, new_corpus_id: Option<CorpusId>) -> Result<(), Error> {
+        match self {
+            SelectedMutator::Elf(m) => {
+                <ELFHavocScheduledMutator<MT> as Mutator<I, S>>::post_exec(m, state, new_corpus_id)
+            }
+
+            SelectedMutator::Last(m) => {
+                <LastWindowMutator as Mutator<I, S>>::post_exec(m, state, new_corpus_id)
+            }
+        }
+    }
+}
 
 pub(crate) struct CaseMetadata {
     pub covers: Coverages,
@@ -164,6 +208,7 @@ fn emit_top_passed_testcases(
 }
 
 pub(crate) fn run_fuzzer(
+    base_mutator: bool,
     max_iters: u64,
     max_run_timeout: u64,
     tracker_window_size: u64,
@@ -206,7 +251,7 @@ pub(crate) fn run_fuzzer(
 
     // Fuzzer, Executor
     let mut fuzzer = StdFuzzer::new(scheduler, feedback, objective);
-    let mut binding = harness::fuzz_harness;
+    let mut binding = fuzz_harness;
     let mut executor = InProcessExecutor::with_timeout(
         &mut binding,
         tuple_list!(coverages_observer, statetrackers_observer),
@@ -260,11 +305,15 @@ pub(crate) fn run_fuzzer(
         .extend(vec!["-I".to_string(), max_inst.to_string()].into_iter());
 
     // Fuzzing Loop
-    let mutator = StdScheduledMutator::new(tuple_list!(LastWindowMutator::new(
-        init_case.mutator_bytes(),
-        &init_metadata.state_trackers.pc_tracker,
-        mutator_window_size
-    )?));
+    let mutator = if base_mutator {
+        SelectedMutator::Elf(ELFHavocScheduledMutator::new(havoc_mutations(), init_case)?)
+    } else {
+        SelectedMutator::Last(LastWindowMutator::new(
+            init_case,
+            &init_metadata.state_trackers.pc_tracker,
+            mutator_window_size,
+        )?)
+    };
     let mut stages = tuple_list!(StdMutationalStage::new(mutator));
 
     let fuzzing_start_time = process_cpu_time_now()?;

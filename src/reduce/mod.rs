@@ -48,11 +48,7 @@ fn validate_exact_trace(
     max_inst: usize,
 ) -> Option<(BytesInput, StateTrackers)> {
     let (exit_kind, candidate) = run_and_collect(&input, max_inst);
-    if is_same_failure_site(exit_kind, &candidate, original) {
-        Some((input, candidate))
-    } else {
-        None
-    }
+    is_same_failure_site(exit_kind, &candidate, original).then(|| (input, candidate))
 }
 
 pub(crate) fn reduce_fault_case(
@@ -75,8 +71,23 @@ pub(crate) fn reduce_fault_case(
         .map(BytesInput::from)
         .unwrap_or(input);
 
+    let (nopped_bytes, nopped_trackers) =
+        match nop_unexecuted_insts(stripped_input.mutator_bytes(), &original) {
+            Some((bytes, trackers)) => {
+                log::info!("Nop unexecuted insts successed");
+                if save_reduce && output_dir.is_some() {
+                    store_testcase(&bytes, None, output_dir.unwrap(), Some("init_nopped")).unwrap();
+                }
+                (bytes, trackers)
+            }
+            None => {
+                log::info!("Nop unexecuted insts failed, skipping");
+                (stripped_input, original.to_owned())
+            }
+        };
+
     let (stripped_prefix_bytes, stripped_prefix_trackers) =
-        match strip_irrelevant_prefix(stripped_input.mutator_bytes(), &original) {
+        match strip_irrelevant_prefix(nopped_bytes.mutator_bytes(), &nopped_trackers) {
             Some((bytes, trackers)) => {
                 log::info!("Strip irrelevant prefix insts successed");
                 if save_reduce && output_dir.is_some() {
@@ -92,7 +103,7 @@ pub(crate) fn reduce_fault_case(
             }
             None => {
                 log::info!("Strip irrelevant prefix insts failed, skipping");
-                (stripped_input, original.to_owned())
+                (nopped_bytes, nopped_trackers)
             }
         };
 
@@ -133,20 +144,5 @@ pub(crate) fn reduce_fault_case(
     //     None => (stripped_suffix_bytes, stripped_suffix_trackers),
     // };
 
-    let (nopped_bytes, nopped_trackers) =
-        match nop_unexecuted_insts(stripped_suffix_bytes.mutator_bytes(), &original) {
-            Some((bytes, trackers)) => {
-                log::info!("Nop unexecuted insts successed");
-                if save_reduce && output_dir.is_some() {
-                    store_testcase(&bytes, None, output_dir.unwrap(), Some("init_nopped")).unwrap();
-                }
-                (bytes, trackers)
-            }
-            None => {
-                log::info!("Nop unexecuted insts failed, skipping");
-                (stripped_suffix_bytes, stripped_suffix_trackers)
-            }
-        };
-
-    nopped_bytes
+    stripped_suffix_bytes
 }

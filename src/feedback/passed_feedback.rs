@@ -5,11 +5,10 @@ use libafl::{
     corpus::Testcase,
     executors::ExitKind,
     feedbacks::{Feedback, StateInitializer},
-    prelude::NewHashFeedback,
 };
 use libafl_bolts::{
     Named,
-    tuples::{Handle, Handled, MatchName, MatchNameRef},
+    tuples::MatchName,
 };
 use serde::{Deserialize, Serialize};
 
@@ -81,9 +80,9 @@ where
         _observers: &OT,
         testcase: &mut Testcase<I>,
     ) -> Result<(), Error> {
-        let pending = self.pending.take().ok_or_else(|| {
-            Error::unknown("PassedFeedback append_metadata called without pending metadata")
-        })?;
+        let pending = self.pending.take().ok_or(Error::illegal_state(
+            "PassedFeedback append_metadata called without pending metadata",
+        ))?;
 
         testcase.add_metadata(pending);
         Ok(())

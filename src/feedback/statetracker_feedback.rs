@@ -130,9 +130,9 @@ where
             self.pending.as_ref().unwrap().tracker
         );
 
-        let pending = self.pending.take().ok_or_else(|| {
-            Error::unknown("StateTrackerFeedback append_metadata called without pending metadata")
-        })?;
+        let pending = self.pending.take().ok_or(Error::illegal_state(
+            "StateTrackerFeedback append_metadata called without pending metadata",
+        ))?;
 
         testcase.add_metadata(pending);
         Ok(())

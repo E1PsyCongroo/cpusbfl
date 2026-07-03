@@ -32,10 +32,6 @@ fn mstatus_with_mpp(mstatus: u64, privilege_mode: u64) -> u64 {
     (mstatus & !(0b11 << 11)) | (mpp << 11)
 }
 
-fn instruction_offset(elf_parser: &ELFParser, pc: u64) -> Option<usize> {
-    usize::try_from(elf_parser.vma2offset(pc, pc.checked_add(COMPRESSED_INST_BYTES as u64)?)?).ok()
-}
-
 fn write_bytes(memory: &mut BTreeMap<u64, u8>, write: MemoryWrite) {
     for offset in 0..write.access.bytes() {
         memory.insert(
@@ -58,9 +54,9 @@ fn collect_memory_bytes(
     // Trace entry N is the state before instruction N. Replaying the skipped
     // prefix therefore includes instructions 0..N, excluding N itself.
     for idx in 0..candidate_idx {
-        let pc = pc_trace.get(idx)?.value;
-        let regs = &arch_trace.get(idx)?.value;
-        let offset = instruction_offset(elf_parser, pc)?;
+        let pc = pc_trace.get(idx).unwrap().value;
+        let regs = &arch_trace.get(idx).unwrap().value;
+        let offset = usize::try_from(elf_parser.vma2offset(pc).unwrap()).unwrap();
 
         match decode_memory_write_at(input, offset, regs) {
             MemoryWriteDecode::NotStore => {}
@@ -75,9 +71,9 @@ fn collect_memory_bytes(
 
     let mut needed = BTreeMap::new();
     for idx in candidate_idx..pc_trace.len() {
-        let pc = pc_trace.get(idx)?.value;
-        let regs = &arch_trace.get(idx)?.value;
-        let offset = instruction_offset(elf_parser, pc)?;
+        let pc = pc_trace.get(idx).unwrap().value;
+        let regs = &arch_trace.get(idx).unwrap().value;
+        let offset = usize::try_from(elf_parser.vma2offset(pc).unwrap()).unwrap();
 
         match decode_memory_read_at(input, offset, regs) {
             MemoryReadDecode::NotLoad => {}
@@ -119,11 +115,11 @@ fn collect_context_restore_plan(
 ) -> Option<ContextRestorePlan> {
     let arch_trace = original.arch_int_reg_tracker.as_slice();
     let csr_trace = original.csr_tracker.as_slice();
-    let arch = arch_trace.get(candidate_idx)?;
-    let csr = csr_trace.get(candidate_idx)?;
+    let arch = arch_trace.get(candidate_idx).unwrap();
+    let csr = csr_trace.get(candidate_idx).unwrap();
 
     let mut reg_changed = [false; 32];
-    for states in arch_trace.get(..=candidate_idx)?.windows(2) {
+    for states in arch_trace.get(..=candidate_idx).unwrap().windows(2) {
         for (idx, (previous, current)) in states[0]
             .value
             .iter()
@@ -204,50 +200,36 @@ fn collect_context_restore_plan(
     })
 }
 
-// fn nop_skipped_prefix_insts(
-//     bytes: &mut [u8],
-//     input: &[u8],
-//     elf_parser: &ELFParser,
-//     original: &StateTrackers,
-//     candidate_idx: usize,
-//     entry_range: std::ops::Range<usize>,
-// ) -> Option<()> {
-//     let pc_trace = original.pc_tracker.as_slice();
-//     let suffix_pcs = pc_trace[candidate_idx..]
-//         .iter()
-//         .map(|state| state.value)
-//         .collect::<HashSet<_>>();
-//     let mut nopped = HashSet::new();
+fn nop_skipped_prefix_insts(
+    bytes: &mut [u8],
+    input: &[u8],
+    elf_parser: &ELFParser,
+    original: &StateTrackers,
+    candidate_idx: usize,
+) {
+    let pc_trace = original.pc_tracker.as_slice();
+    let suffix_pcs = pc_trace[candidate_idx..]
+        .iter()
+        .map(|state| state.value)
+        .collect::<HashSet<_>>();
+    let mut nopped = HashSet::new();
 
-//     for state in &pc_trace[..candidate_idx] {
-//         if suffix_pcs.contains(&state.value) {
-//             continue;
-//         }
+    for state in &pc_trace[1..candidate_idx] {
+        if suffix_pcs.contains(&state.value) || !nopped.insert(state.value) {
+            continue;
+        }
 
-//         let offset = usize::try_from(elf_parser.vma2offset(
-//             state.value,
-//             state.value.checked_add(STANDARD_INST_BYTES as u64)?,
-//         )?)
-//         .ok()?;
-//         if entry_range.contains(&offset) || !nopped.insert(offset) {
-//             continue;
-//         }
+        let offset = usize::try_from(elf_parser.vma2offset(state.value).unwrap()).unwrap();
+        let inst_len = inst_len_at(input, offset);
+        let end = offset.checked_add(inst_len).unwrap();
 
-//         let inst_len = inst_len_at(input, offset);
-//         let end = offset.checked_add(inst_len)?;
-//         if end > bytes.len() {
-//             return None;
-//         }
-
-//         match inst_len {
-//             2 => bytes[offset..end].copy_from_slice(&C_NOP),
-//             4 => bytes[offset..end].copy_from_slice(&NOP),
-//             _ => panic!("instruction length must be 2 or 4 bytes"),
-//         }
-//     }
-
-//     Some(())
-// }
+        match inst_len {
+            2 => bytes[offset..end].copy_from_slice(&C_NOP),
+            4 => bytes[offset..end].copy_from_slice(&NOP),
+            _ => panic!("instruction length must be 2 or 4 bytes"),
+        }
+    }
+}
 
 fn append_context_restore(
     output: &mut Vec<u8>,
@@ -365,25 +347,20 @@ fn try_strip_prefix_at(
         true,
         Some(u64::from(restore_plan.scratches[0].0)),
     )?;
-    let entry_offset = usize::try_from(elf_parser.vma2offset(
-        entry_pc,
-        entry_pc.checked_add(u64::try_from(entry_jmp.len()).ok()?)?,
-    )?)
-    .ok()?;
-    let entry_end = entry_offset.checked_add(entry_jmp.len())?;
+    let entry_offset = usize::try_from(elf_parser.vma2offset(entry_pc).unwrap()).unwrap();
+    let entry_end = entry_offset.checked_add(entry_jmp.len()).unwrap();
 
     let mut bytes = input.to_vec();
     bytes
         .get_mut(entry_offset..entry_end)?
         .copy_from_slice(&entry_jmp);
-    // nop_skipped_prefix_insts(
-    //     &mut bytes,
-    //     input,
-    //     elf_parser,
-    //     original,
-    //     candidate_idx,
-    //     entry_offset..entry_end,
-    // )?;
+    nop_skipped_prefix_insts(
+        &mut bytes,
+        input,
+        elf_parser,
+        original,
+        candidate_idx,
+    );
 
     let bytes = ELFParser::from_bytes(&bytes)
         .ok()?

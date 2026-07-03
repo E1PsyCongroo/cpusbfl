@@ -1,5 +1,3 @@
-use std;
-
 use lief::generic::Section;
 use ouroboros::self_referencing;
 use tempfile::NamedTempFile;
@@ -78,16 +76,25 @@ impl From<lief::elf::Binary> for ELFParser {
             elf,
             executable_sections_builder: |elf| {
                 elf.sections()
-                    .filter(|s| {
-                        s.flags().contains(lief::elf::section::Flags::EXECINSTR)
-                            && matches!(s.get_type(), lief::elf::section::Type::PROGBITS)
+                    .filter(|section| {
+                        section
+                            .flags()
+                            .contains(lief::elf::section::Flags::EXECINSTR)
+                            && section.get_type() == lief::elf::section::Type::PROGBITS
                     })
                     .collect()
             },
-            text_section_builder: |elf| elf.section_by_name(".text"),
+            text_section_builder: |elf| {
+                elf.section_by_name(".text").filter(|section| {
+                    section
+                        .flags()
+                        .contains(lief::elf::section::Flags::EXECINSTR)
+                        && section.get_type() == lief::elf::section::Type::PROGBITS
+                })
+            },
             load_segments_builder: |elf| {
                 elf.segments()
-                    .filter(|s| matches!(s.p_type(), lief::elf::segment::Type::LOAD))
+                    .filter(|s| s.p_type() == lief::elf::segment::Type::LOAD)
                     .collect()
             },
         }
@@ -119,7 +126,7 @@ impl ELFParser {
         Ok(ELFParser::from(elf))
     }
 
-    pub fn section_containing_vma<'a>(
+    pub fn executable_section_containing_vma<'a>(
         &'a self,
         vma_start: u64,
         vma_end: u64,
@@ -129,11 +136,15 @@ impl ELFParser {
             .find(|s| section_contains_range(s, vma_start, vma_end))
     }
 
-    pub fn vma2offset(&self, vma_start: u64, vma_end: u64) -> Option<u64> {
-        let section = self.section_containing_vma(vma_start, vma_end)?;
+    pub fn executable_section_vma2offset(&self, vma_start: u64, vma_end: u64) -> Option<u64> {
+        let section = self.executable_section_containing_vma(vma_start, vma_end)?;
         vma_start
             .checked_sub(section.virtual_address())?
             .checked_add(section.file_offset())
+    }
+
+    pub fn vma2offset(&self, vma: u64) -> Result<u64, Box<dyn std::error::Error>> {
+        self.borrow_elf().virtual_address_to_offset(vma).map_err(|e| e.to_string().into())
     }
 
     pub fn find_insert_vaddr(

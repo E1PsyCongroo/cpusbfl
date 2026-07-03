@@ -119,9 +119,9 @@ where
         self.inner
             .append_metadata(state, manager, observers, testcase)?;
 
-        let pending = self.pending.take().ok_or_else(|| {
-            Error::unknown("CoverageFeedback append_metadata called without pending metadata")
-        })?;
+        let pending = self.pending.take().ok_or(Error::illegal_state(
+            "CoverageFeedback append_metadata called without pending metadata",
+        ))?;
 
         testcase.add_metadata(pending);
         Ok(())

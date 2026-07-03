@@ -102,19 +102,18 @@ where
         self.inner
             .append_metadata(state, manager, observers, testcase)?;
 
-        // println!("[Debug] Appending state trackers metadata:");
-        // println!(
-        //     "[Debug] State trackers has {} states: {:?}",
-        //     self.pending.as_ref().unwrap().trackers.len(),
-        //     self.pending.as_ref().unwrap().trackers
-        // );
+        log::debug!("[Debug] Appending state trackers metadata:");
+        log::debug!(
+            "[Debug] State trackers has {} states: {:?}",
+            self.pending.as_ref().unwrap().trackers.len(),
+            self.pending.as_ref().unwrap().trackers
+        );
 
-        let pending = self.pending.take().ok_or_else(|| {
-            Error::unknown("StateTrackersFeedback append_metadata called without pending metadata")
-        })?;
+        let pending = self.pending.take().ok_or(Error::illegal_state(
+            "StateTrackersFeedback append_metadata called without pending metadata",
+        ))?;
 
         testcase.add_metadata(pending);
         Ok(())
     }
 }
-

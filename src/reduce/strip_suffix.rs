@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use libafl::prelude::*;
 use lief;
 use lief::generic::Section;
@@ -16,62 +18,44 @@ fn insts_to_failure_after_jal(pc_trace: &StateTracker<PCState>, candidate_pc: u6
     candidate_idx + 2
 }
 
-// fn nop_skipped_suffix_insts(
-//     bytes: &mut [u8],
-//     input: &[u8],
-//     elf_parser: &ELFParser,
-//     original: &StateTrackers,
-//     candidate_pc: u64,
-//     failure_pc: u64,
-// ) -> Option<()> {
-//     let pc_trace = original.pc_tracker.as_slice();
-//     let candidate_idx = pc_trace
-//         .iter()
-//         .position(|state| state.value == candidate_pc)?;
-//     let prefix_pcs = pc_trace[..=candidate_idx]
-//         .iter()
-//         .map(|state| state.value)
-//         .collect::<HashSet<_>>();
-//     let mut nopped = HashSet::new();
+fn nop_skipped_suffix_insts(
+    bytes: &mut [u8],
+    input: &[u8],
+    elf_parser: &ELFParser,
+    original: &StateTrackers,
+    candidate_pc: u64,
+    failure_pc: u64,
+) {
+    let pc_trace = original.pc_tracker.as_slice();
+    let candidate_idx = pc_trace
+        .iter()
+        .position(|state| state.value == candidate_pc)
+        .unwrap();
+    let prefix_pcs = pc_trace[..=candidate_idx]
+        .iter()
+        .map(|state| state.value)
+        .collect::<HashSet<_>>();
+    let mut nopped = HashSet::new();
 
-//     for state in &pc_trace[candidate_idx + 1..pc_trace.len().saturating_sub(1)] {
-//         if state.value == failure_pc || prefix_pcs.contains(&state.value) {
-//             continue;
-//         }
+    for state in &pc_trace[candidate_idx + 1..pc_trace.len().saturating_sub(1)] {
+        if state.value == failure_pc
+            || prefix_pcs.contains(&state.value)
+            || !nopped.insert(state.value)
+        {
+            continue;
+        }
 
-//         let section = elf_parser.section_containing_vma(
-//             state.value,
-//             state.value.checked_add(COMPRESSED_INST_BYTES as u64)?,
-//         )?;
-//         let offset = usize::try_from(
-//             state
-//                 .value
-//                 .checked_sub(section.virtual_address())?
-//                 .checked_add(section.offset())?,
-//         )
-//         .ok()?;
-//         let section_file_end =
-//             usize::try_from(section.offset().checked_add(section.size())?).ok()?;
+        let offset = usize::try_from(elf_parser.vma2offset(state.value).unwrap()).unwrap();
+        let inst_len = inst_len_at(input, offset);
+        let end = offset.checked_add(inst_len).unwrap();
 
-//         if offset.checked_add(COMPRESSED_INST_BYTES)? > section_file_end || !nopped.insert(offset) {
-//             continue;
-//         }
-
-//         let inst_len = inst_len_at(input, offset);
-//         let end = offset.checked_add(inst_len)?;
-//         if end > section_file_end {
-//             return None;
-//         }
-
-//         match inst_len {
-//             2 => bytes[offset..end].copy_from_slice(&C_NOP),
-//             4 => bytes[offset..end].copy_from_slice(&NOP),
-//             _ => panic!("instruction length must be 2 or 4 bytes"),
-//         }
-//     }
-
-//     Some(())
-// }
+        match inst_len {
+            2 => bytes[offset..end].copy_from_slice(&C_NOP),
+            4 => bytes[offset..end].copy_from_slice(&NOP),
+            _ => panic!("instruction length must be 2 or 4 bytes"),
+        }
+    }
+}
 
 fn try_jal_to_failure_site(
     input: &[u8],
@@ -81,22 +65,18 @@ fn try_jal_to_failure_site(
     original: &StateTrackers,
 ) -> Option<(BytesInput, StateTrackers)> {
     let mut bytes = input.to_vec();
-    let offset = usize::try_from(elf_parser.vma2offset(
-        candidate_pc,
-        candidate_pc.checked_add(STANDARD_INST_BYTES as u64)?,
-    )?)
-    .ok()?;
+    let offset = usize::try_from(elf_parser.vma2offset(candidate_pc).unwrap()).unwrap();
 
     let jmp = encode_jmp(candidate_pc, failure_pc, false, None)?;
     bytes[offset..offset.checked_add(STANDARD_INST_BYTES)?].copy_from_slice(&jmp);
-    // nop_skipped_suffix_insts(
-    //     &mut bytes,
-    //     input,
-    //     elf_parser,
-    //     original,
-    //     candidate_pc,
-    //     failure_pc,
-    // )?;
+    nop_skipped_suffix_insts(
+        &mut bytes,
+        input,
+        elf_parser,
+        original,
+        candidate_pc,
+        failure_pc,
+    );
     let max_inst = insts_to_failure_after_jal(&original.pc_tracker, candidate_pc);
 
     validate_exact_trace(BytesInput::from(bytes), original, max_inst)

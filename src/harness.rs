@@ -112,7 +112,7 @@ pub(crate) fn sim_run_multiple(
     return ret;
 }
 
-// pub static mut SAVE_ERRORS: bool = false;
+pub static mut SAVE_ERRORS: bool = false;
 
 pub(crate) fn sim_run_with_trackers(input: &BytesInput) -> ExitKind {
     let ret = sim_run_from_memory(input, false, false);
@@ -166,10 +166,10 @@ pub(crate) fn fuzz_harness(input: &BytesInput) -> ExitKind {
     io::stdout().flush().unwrap();
 
     // save the target testcase into disk
-    // let do_save = unsafe { SAVE_ERRORS && ret != 0 };
-    // if do_save {
-    //     store_testcase(input, None, "errors", None).unwrap();
-    // }
+    let do_save = unsafe { SAVE_ERRORS && ret != 0 };
+    if do_save {
+        store_testcase(input, None, "errors", None).unwrap();
+    }
 
     if ret != 0 {
         ExitKind::Crash

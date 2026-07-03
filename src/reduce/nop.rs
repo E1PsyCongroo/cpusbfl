@@ -15,21 +15,19 @@ struct CodeInst {
     len: usize,
 }
 
-fn collect_code_insts(input: &[u8], sections: &[lief::elf::Section]) -> Option<Vec<CodeInst>> {
+fn collect_code_insts(input: &[u8], sections: &[lief::elf::Section]) -> Vec<CodeInst> {
     let mut insts = Vec::new();
 
     for section in sections {
-        let mut offset = usize::try_from(section.offset()).ok()?;
+        let mut offset = usize::try_from(section.offset()).unwrap();
         let mut pc = section.virtual_address();
 
-        let file_end = offset + usize::try_from(section.size()).ok()?;
+        let file_end = offset + usize::try_from(section.size()).unwrap();
         let vma_end = section.virtual_address() + section.size();
 
-        while offset.checked_add(COMPRESSED_INST_BYTES)? <= file_end && pc < vma_end {
+        while offset.checked_add(COMPRESSED_INST_BYTES).unwrap() <= file_end && pc < vma_end {
             let inst_len = inst_len_at(input, offset);
-            if offset.checked_add(inst_len)? > file_end {
-                break;
-            }
+            assert!(offset.checked_add(inst_len).unwrap() <= file_end);
             insts.push(CodeInst {
                 pc,
                 offset,
@@ -40,7 +38,7 @@ fn collect_code_insts(input: &[u8], sections: &[lief::elf::Section]) -> Option<V
         }
     }
 
-    Some(insts)
+    insts
 }
 
 fn build_nopped_input(
@@ -102,9 +100,8 @@ pub fn nop_unexecuted_insts(
     );
 
     let elf_parser = ELFParser::from_bytes(input)
-        .inspect_err(|err| log::warn!("Failed to parse ELF for nop reduction: {err}"))
-        .ok()?;
-    let insts = collect_code_insts(input, elf_parser.borrow_executable_sections())?;
+        .expect("Failed to parse ELF for nop reduction");
+    let insts = collect_code_insts(input, elf_parser.borrow_executable_sections());
 
     let executed = original
         .pc_tracker
