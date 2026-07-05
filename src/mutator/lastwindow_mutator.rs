@@ -18,6 +18,7 @@ struct LastWindowCandidate {
 pub(crate) struct LastWindowMutator {
     candidates: Vec<LastWindowCandidate>,
     total_weight: u64,
+    iters: u64,
 }
 
 impl LastWindowMutator {
@@ -62,9 +63,8 @@ impl LastWindowMutator {
                 .ok_or("LastWindowMutator weight overflow")?;
 
             total_weight = total_weight
-                + weight
-                    .checked_add(weight)
-                    .ok_or("LastWindowMutator total_weight overflow")?;
+                .checked_add(weight)
+                .ok_or("LastWindowMutator total_weight overflow")?;
 
             candidates.push(LastWindowCandidate {
                 offset,
@@ -80,9 +80,11 @@ impl LastWindowMutator {
             .into());
         }
 
+        let iters = std::cmp::max(1, (candidates.len() as f64).sqrt().floor() as u64);
         Ok(Self {
             candidates,
             total_weight,
+            iters,
         })
     }
 
@@ -110,14 +112,12 @@ impl LastWindowMutator {
             chunk.copy_from_slice(&random[..chunk.len()]);
         }
     }
-}
 
-impl<I, S> Mutator<I, S> for LastWindowMutator
-where
-    S: HasRand,
-    I: HasMutatorBytes,
-{
-    fn mutate(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error> {
+    fn mutate_one<S, I>(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error>
+    where
+        S: HasRand,
+        I: HasMutatorBytes,
+    {
         let Some(candidate_idx) = self.pick_candidate_idx(state.rand_mut()) else {
             return Ok(MutationResult::Skipped);
         };
@@ -136,6 +136,23 @@ where
         Self::fill_random_bytes(state.rand_mut(), dst);
 
         Ok(MutationResult::Mutated)
+    }
+}
+
+impl<I, S> Mutator<I, S> for LastWindowMutator
+where
+    S: HasRand,
+    I: HasMutatorBytes,
+{
+    fn mutate(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error> {
+        let mut r = MutationResult::Skipped;
+        for _ in 0..self.iters {
+            let outcome = self.mutate_one(state, input)?;
+            if outcome == MutationResult::Mutated {
+                r = MutationResult::Mutated;
+            }
+        }
+        Ok(r)
     }
 
     #[inline]

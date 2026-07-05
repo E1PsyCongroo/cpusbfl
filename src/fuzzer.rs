@@ -15,46 +15,37 @@ use crate::similarity::*;
 use crate::state_tracker::*;
 use crate::utils::*;
 
-#[derive(Debug)]
-enum SelectedMutator<MT> {
-    Elf(ELFHavocScheduledMutator<MT>),
-    Last(LastWindowMutator),
+enum SelectedMutator<I, S> {
+    First(Box<dyn Mutator<I, S>>),
+    Second(Box<dyn Mutator<I, S>>),
 }
-
-impl<MT> Named for SelectedMutator<MT> {
+impl<I, S> Named for SelectedMutator<I, S> {
     fn name(&self) -> &Cow<'static, str> {
         match self {
-            SelectedMutator::Elf(m) => m.name(),
-            SelectedMutator::Last(m) => m.name(),
+            SelectedMutator::First(m) => m.name(),
+            SelectedMutator::Second(m) => m.name(),
         }
     }
 }
 
-impl<I, MT, S> Mutator<I, S> for SelectedMutator<MT>
+impl<I, S> Mutator<I, S> for SelectedMutator<I, S>
 where
     I: HasMutatorBytes,
-    MT: MutatorsTuple<BytesInput, S>,
     S: HasRand,
-    LastWindowMutator: Mutator<I, S>,
 {
     #[inline]
     fn mutate(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error> {
         match self {
-            SelectedMutator::Elf(m) => m.mutate(state, input),
-            SelectedMutator::Last(m) => m.mutate(state, input),
+            SelectedMutator::First(m) => m.mutate(state, input),
+            SelectedMutator::Second(m) => m.mutate(state, input),
         }
     }
 
     #[inline]
     fn post_exec(&mut self, state: &mut S, new_corpus_id: Option<CorpusId>) -> Result<(), Error> {
         match self {
-            SelectedMutator::Elf(m) => {
-                <ELFHavocScheduledMutator<MT> as Mutator<I, S>>::post_exec(m, state, new_corpus_id)
-            }
-
-            SelectedMutator::Last(m) => {
-                <LastWindowMutator as Mutator<I, S>>::post_exec(m, state, new_corpus_id)
-            }
+            SelectedMutator::First(m) => m.post_exec(state, new_corpus_id),
+            SelectedMutator::Second(m) => m.post_exec(state, new_corpus_id),
         }
     }
 }
@@ -306,13 +297,16 @@ pub(crate) fn run_fuzzer(
 
     // Fuzzing Loop
     let mutator = if base_mutator {
-        SelectedMutator::Elf(ELFHavocScheduledMutator::new(havoc_mutations(), init_case)?)
+        SelectedMutator::First(Box::new(ELFHavocScheduledMutator::new(
+            havoc_mutations(),
+            init_case,
+        )?))
     } else {
-        SelectedMutator::Last(LastWindowMutator::new(
+        SelectedMutator::Second(Box::new(LastWindowMutator::new(
             init_case,
             &init_metadata.state_trackers.pc_tracker,
             mutator_window_size,
-        )?)
+        )?))
     };
     let mut stages = tuple_list!(StdMutationalStage::new(mutator));
 
