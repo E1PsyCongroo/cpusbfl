@@ -39,6 +39,8 @@ struct Arguments {
     max_run_timeout: u64,
     #[clap(default_value_t = 20, long)]
     tracker_window_size: u64,
+    #[clap(default_value_t = mutator::lastwindow_mutator::MutationStrategy::Uniform, value_enum, long)]
+    mutator_weight_strategy: mutator::lastwindow_mutator::MutationStrategy,
     #[clap(default_value_t = 20, long)]
     mutator_window_size: u64,
     #[clap(default_value_t = String::from("./corpus"), long)]
@@ -140,6 +142,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             args.max_iters,
             args.max_run_timeout,
             args.tracker_window_size,
+            args.mutator_weight_strategy,
             args.mutator_window_size,
             args.top_pass,
             args.save_trace,

@@ -1,11 +1,32 @@
 use std::borrow::Cow;
 
+use clap::ValueEnum;
 use libafl::prelude::*;
 use libafl_bolts::{Named, rands::Rand};
 
 use crate::elf::*;
 use crate::inst::*;
 use crate::state_tracker::*;
+
+#[derive(Debug, Clone, ValueEnum)]
+pub(crate) enum MutationStrategy {
+    #[value(name = "uniform")]
+    Uniform,
+    #[value(name = "tail_linear")]
+    TailLinear,
+    #[value(name = "tail_quad")]
+    TailQuadratic,
+    #[value(name = "head_linear")]
+    HeadLinear,
+    #[value(name = "head_quad")]
+    HeadQuadratic,
+}
+
+impl Default for MutationStrategy {
+    fn default() -> Self {
+        Self::Uniform
+    }
+}
 
 #[derive(Debug, Clone)]
 struct LastWindowCandidate {
@@ -25,6 +46,7 @@ impl LastWindowMutator {
     pub(crate) fn new<I>(
         init_bytes: &I,
         pc_trace: &StateTracker<PCState>,
+        strategy: MutationStrategy,
         window_size: u64,
     ) -> Result<Self, Box<dyn std::error::Error>>
     where
@@ -57,10 +79,21 @@ impl LastWindowMutator {
 
             let inst_len = inst_len_at(init_bytes, offset);
 
-            let rank = u64::try_from(idx + 1)?;
-            let weight = rank
-                .checked_mul(rank)
-                .ok_or("LastWindowMutator weight overflow")?;
+            let weight = match strategy {
+                MutationStrategy::Uniform => 1u64,
+                MutationStrategy::TailLinear => u64::try_from(idx + 1)?,
+                MutationStrategy::TailQuadratic => u64::try_from(
+                    (idx + 1)
+                        .checked_pow(2)
+                        .ok_or("LastWindowMutator weight overflow")?,
+                )?,
+                MutationStrategy::HeadLinear => u64::try_from(window.len() - idx)?,
+                MutationStrategy::HeadQuadratic => u64::try_from(
+                    (window.len() - idx)
+                        .checked_pow(2)
+                        .ok_or("LastWindowMutator weight overflow")?,
+                )?,
+            };
 
             total_weight = total_weight
                 .checked_add(weight)

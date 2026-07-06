@@ -8,7 +8,8 @@ use crate::coverage::*;
 use crate::feedback::{coverages_feedback::*, passed_feedback::*, statetrackers_feedback::*};
 use crate::harness::{SIM_ARGS, fuzz_harness};
 use crate::mutator::{
-    elf_scheduled::ELFHavocScheduledMutator, lastwindow_mutator::LastWindowMutator,
+    elf_scheduled::ELFHavocScheduledMutator,
+    lastwindow_mutator::{LastWindowMutator, MutationStrategy},
 };
 use crate::observer::{coverages_observer::*, statetrackers_observer::*};
 use crate::similarity::*;
@@ -203,6 +204,7 @@ pub(crate) fn run_fuzzer(
     max_iters: u64,
     max_run_timeout: u64,
     tracker_window_size: u64,
+    mutator_strategy: MutationStrategy,
     mutator_window_size: u64,
     top_n: u64,
     save_trace: bool,
@@ -305,6 +307,7 @@ pub(crate) fn run_fuzzer(
         SelectedMutator::Second(Box::new(LastWindowMutator::new(
             init_case,
             &init_metadata.state_trackers.pc_tracker,
+            mutator_strategy,
             mutator_window_size,
         )?))
     };
