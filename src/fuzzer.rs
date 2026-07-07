@@ -65,6 +65,7 @@ fn emit_top_passed_testcases(
         InMemoryCorpus<ValueInput<Vec<u8>>>,
     >,
     init_metadata: CaseMetadata,
+    cover_weight: f64,
     top_n: u64,
     save_trace: bool,
     output: &Option<String>,
@@ -120,8 +121,8 @@ fn emit_top_passed_testcases(
             .iter()
             .map(|(cov_name, cov_len, init_counts)| {
                 let metadata_counts = metadata.covers.get(cov_name).covered_counts();
-                let dis =
-                    euclidean_distance(&init_counts, &metadata_counts) / (*cov_len as f64).sqrt();
+                let dis = log_euclidean_distance(&init_counts, &metadata_counts)
+                    / (*cov_len as f64).sqrt();
                 dis
             })
             .sum::<f64>()
@@ -142,21 +143,52 @@ fn emit_top_passed_testcases(
             10,
         );
 
-        log::info!(
+        log::debug!(
             "Corpus testcase {id}: cover_distance {}, state_distance {}",
             cover_distance,
             state_distance
         );
-
-        let distance = cover_distance + state_distance;
 
         let input = testcase
             .input()
             .as_ref()
             .ok_or(format!("Corpus testcase {id} has no input"))?;
 
-        passed_cases.push((usize::from(id), input.clone(), metadata, distance));
+        passed_cases.push((
+            usize::from(id),
+            input.clone(),
+            metadata,
+            cover_distance,
+            state_distance,
+        ));
     }
+
+    let cover_distances_trans = quantile_transform(
+        &passed_cases
+            .iter()
+            .map(|&(_, _, _, cover_distance, _)| cover_distance)
+            .collect::<Vec<_>>(),
+    );
+    let state_distances_trans = quantile_transform(
+        &passed_cases
+            .iter()
+            .map(|&(_, _, _, _, state_distance)| state_distance)
+            .collect::<Vec<_>>(),
+    );
+
+    let mut passed_cases = passed_cases
+        .into_iter()
+        .zip(cover_distances_trans)
+        .zip(state_distances_trans)
+        .map(|(((id, input, metadata, _, _), cover), state)| {
+            (
+                id,
+                input,
+                metadata,
+                cover_weight * cover + (1.0 - cover_weight) * state,
+            )
+        })
+        .collect::<Vec<_>>();
 
     passed_cases.sort_by(|a, b| {
         a.3.partial_cmp(&b.3)
@@ -206,6 +238,7 @@ pub(crate) fn run_fuzzer(
     tracker_window_size: u64,
     mutator_strategy: MutationStrategy,
     mutator_window_size: u64,
+    cover_weight: f64,
     top_n: u64,
     save_trace: bool,
     init_case: &BytesInput,
@@ -347,5 +380,5 @@ pub(crate) fn run_fuzzer(
         }
     }
 
-    emit_top_passed_testcases(state, init_metadata, top_n, save_trace, output)
+    emit_top_passed_testcases(state, init_metadata, cover_weight, top_n, save_trace, output)
 }

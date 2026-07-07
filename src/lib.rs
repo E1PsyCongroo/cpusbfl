@@ -18,6 +18,16 @@ use std::io::Write;
 
 use clap::Parser;
 
+fn parse_distance_weight(s: &str) -> Result<f64, String> {
+    let value: f64 = s.parse::<f64>().map_err(|e| e.to_string())?;
+
+    if (0.0..=1.0).contains(&value) {
+        Ok(value)
+    } else {
+        Err(format!("{value} is not in range [0, 1]"))
+    }
+}
+
 #[derive(Parser, Default, Debug)]
 struct Arguments {
     // Fuzzer options
@@ -41,10 +51,12 @@ struct Arguments {
     max_run_timeout: u64,
     #[clap(default_value_t = 20, long)]
     tracker_window_size: u64,
-    #[clap(default_value_t = mutator::lastwindow_mutator::MutationStrategy::Uniform, value_enum, long)]
-    mutator_weight_strategy: mutator::lastwindow_mutator::MutationStrategy,
     #[clap(default_value_t = 20, long)]
     mutator_window_size: u64,
+    #[clap(default_value_t = mutator::lastwindow_mutator::MutationStrategy::Uniform, value_enum, long)]
+    mutator_weight_strategy: mutator::lastwindow_mutator::MutationStrategy,
+    #[clap(default_value_t = 0.5f64, value_parser = parse_distance_weight, long)]
+    cover_distance_weight: f64,
     #[clap(default_value_t = String::from("./corpus"), long)]
     corpus_input: String,
     #[clap(long)]
@@ -164,6 +176,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             args.tracker_window_size,
             args.mutator_weight_strategy,
             args.mutator_window_size,
+            args.cover_distance_weight,
             args.top_pass,
             args.save_trace,
             &init_case,
