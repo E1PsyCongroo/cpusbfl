@@ -323,11 +323,11 @@ pub(crate) fn run_fuzzer(
     log::info!("Fuzzing process CPU time = {fuzzing_elapsed:?}");
 
     if let Some(output_dir) = output.as_ref() {
-        let mut fuzzing_time_fs = std::fs::OpenOptions::new()
+        std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(std::path::PathBuf::from(format!("{output_dir}/fuzzing_time.txt")).as_path())?;
-        writeln!(&mut fuzzing_time_fs, "{fuzzing_elapsed:?}")?;
+            .open(std::path::PathBuf::from(format!("{output_dir}/fuzzing_time.txt")).as_path())?
+            .write_fmt(format_args!("{fuzzing_elapsed:?}"))?;
     }
 
     for cover_name in cover_names() {

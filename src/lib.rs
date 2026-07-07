@@ -14,6 +14,8 @@ mod spectrum;
 mod state_tracker;
 mod utils;
 
+use std::io::Write;
+
 use clap::Parser;
 
 #[derive(Parser, Default, Debug)]
@@ -123,16 +125,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if args.fuzzing {
+        let sbfl_start_time = utils::process_cpu_time_now()?;
         let input_case = utils::load_initial_case(&args.corpus_input)?;
         let init_case = if args.reduce {
             harness::sim_run_with_trackers(&input_case);
             let original_trackers = state_tracker::trackers().clone();
-            reduce::reduce_fault_case(
+            let reducing_start_time = utils::process_cpu_time_now()?;
+            let reduced_case = reduce::reduce_fault_case(
                 input_case,
                 original_trackers,
                 args.save_reduce,
                 &args.output,
-            )
+            );
+            let reducing_end_time = utils::process_cpu_time_now()?;
+            let reducing_elapsed = reducing_end_time
+                .checked_sub(reducing_start_time)
+                .unwrap_or_default();
+            log::info!("Reducing process CPU time = {reducing_elapsed:?}");
+            if let Some(output_dir) = args.output.as_ref() {
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(
+                        std::path::PathBuf::from(format!("{output_dir}/reducing_time.txt"))
+                            .as_path(),
+                    )?
+                    .write_fmt(format_args!("{reducing_elapsed:?}"))?;
+            }
+            reduced_case
         } else {
             input_case
         };
@@ -161,6 +181,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &args.output,
             )
         })?;
+        let sbfl_end_time = utils::process_cpu_time_now()?;
+        let sbfl_elapsed = sbfl_end_time
+            .checked_sub(sbfl_start_time)
+            .unwrap_or_default();
+        log::info!("SBFL process CPU time = {sbfl_elapsed:?}");
+        if let Some(output_dir) = args.output.as_ref() {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(std::path::PathBuf::from(format!("{output_dir}/sbfl_time.txt")).as_path())?
+                .write_fmt(format_args!("{sbfl_elapsed:?}"))?;
+        }
     }
 
     Ok(())

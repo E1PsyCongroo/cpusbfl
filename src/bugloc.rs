@@ -129,22 +129,17 @@ fn get_module_files<P: AsRef<Path>>(path: P) -> Vec<PathBuf> {
     let path = path.as_ref();
     let mut files = Vec::new();
 
-    // Check if the path is a file or directory
     if path.is_file() {
-        // If it's a file, check if it has the appropriate extension
         if let Some(extension) = path.extension() {
             if extension == "sv" || extension == "v" {
                 files.push(path.to_path_buf());
             }
         }
     } else if path.is_dir() {
-        // If it's a directory, iterate through the entries
         if let Ok(entries) = fs::read_dir(path) {
             for entry in entries.filter_map(Result::ok) {
                 let entry_path = entry.path();
-                // Only process files (skip subdirectories)
                 if entry_path.is_file() {
-                    // Check if the file has the appropriate extension
                     if let Some(extension) = entry_path.extension() {
                         if extension == "sv" || extension == "v" {
                             files.push(entry_path);
