@@ -99,8 +99,7 @@ pub fn nop_unexecuted_insts(
         input.len()
     );
 
-    let elf_parser = ELFParser::from_bytes(input)
-        .expect("Failed to parse ELF for nop reduction");
+    let elf_parser = ELFParser::from_bytes(input).expect("Failed to parse ELF for nop reduction");
     let insts = collect_code_insts(input, elf_parser.borrow_executable_sections());
 
     let executed = original

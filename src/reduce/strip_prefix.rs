@@ -354,13 +354,7 @@ fn try_strip_prefix_at(
     bytes
         .get_mut(entry_offset..entry_end)?
         .copy_from_slice(&entry_jmp);
-    nop_skipped_prefix_insts(
-        &mut bytes,
-        input,
-        elf_parser,
-        original,
-        candidate_idx,
-    );
+    nop_skipped_prefix_insts(&mut bytes, input, elf_parser, original, candidate_idx);
 
     let bytes = ELFParser::from_bytes(&bytes)
         .ok()?

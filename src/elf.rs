@@ -144,7 +144,9 @@ impl ELFParser {
     }
 
     pub fn vma2offset(&self, vma: u64) -> Result<u64, Box<dyn std::error::Error>> {
-        self.borrow_elf().virtual_address_to_offset(vma).map_err(|e| e.to_string().into())
+        self.borrow_elf()
+            .virtual_address_to_offset(vma)
+            .map_err(|e| e.to_string().into())
     }
 
     pub fn find_insert_vaddr(

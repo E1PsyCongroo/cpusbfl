@@ -1,8 +1,10 @@
 use std::borrow::Cow;
 use std::{any::type_name, io::Write};
 
+use clap::ValueEnum;
 use libafl::{StdFuzzer, prelude::*, schedulers::QueueScheduler, state::StdState};
 use libafl_bolts::{Named, current_nanos, rands::StdRand, tuples::tuple_list};
+use rand::seq::SliceRandom;
 
 use crate::coverage::*;
 use crate::feedback::{coverages_feedback::*, passed_feedback::*, statetrackers_feedback::*};
@@ -57,6 +59,19 @@ pub(crate) struct CaseMetadata {
     pub is_passed: bool,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+#[value(rename_all = "lowercase")]
+pub(crate) enum Selection {
+    Random,
+    Sort,
+}
+
+impl Default for Selection {
+    fn default() -> Self {
+        Self::Sort
+    }
+}
+
 fn emit_top_passed_testcases(
     mut state: StdState<
         InMemoryCorpus<ValueInput<Vec<u8>>>,
@@ -67,6 +82,7 @@ fn emit_top_passed_testcases(
     init_metadata: CaseMetadata,
     cover_weight: f64,
     top_n: u64,
+    selection: Selection,
     save_trace: bool,
     output: &Option<String>,
 ) -> Result<Vec<CaseMetadata>, Box<dyn std::error::Error>> {
@@ -190,17 +206,26 @@ fn emit_top_passed_testcases(
         })
         .collect::<Vec<_>>();
 
-    passed_cases.sort_by(|a, b| {
-        a.3.partial_cmp(&b.3)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.0.cmp(&b.0))
-    });
+    match selection {
+        Selection::Random => {
+            let mut rng = rand::thread_rng();
+            passed_cases.shuffle(&mut rng);
+        }
+        Selection::Sort => {
+            passed_cases.sort_by(|a, b| {
+                a.3.partial_cmp(&b.3)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| a.0.cmp(&b.0))
+            });
+        }
+    }
 
     let limit = usize::min(top_n as usize, passed_cases.len());
     log::info!(
-        "Found {} passed testcases with unique coverage, selecting top {}.",
+        "Found {} passed testcases with unique coverage, selecting {} cases by {:?}.",
         passed_cases.len(),
-        limit
+        limit,
+        selection
     );
 
     let top_passed_cases: Vec<_> = passed_cases.into_iter().take(limit).collect();
@@ -240,6 +265,7 @@ pub(crate) fn run_fuzzer(
     mutator_window_size: u64,
     cover_weight: f64,
     top_n: u64,
+    selection: Selection,
     save_trace: bool,
     init_case: &BytesInput,
     output: &Option<String>,
@@ -380,5 +406,13 @@ pub(crate) fn run_fuzzer(
         }
     }
 
-    emit_top_passed_testcases(state, init_metadata, cover_weight, top_n, save_trace, output)
+    emit_top_passed_testcases(
+        state,
+        init_metadata,
+        cover_weight,
+        top_n,
+        selection,
+        save_trace,
+        output,
+    )
 }

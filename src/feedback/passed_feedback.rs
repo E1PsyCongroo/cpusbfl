@@ -6,10 +6,7 @@ use libafl::{
     executors::ExitKind,
     feedbacks::{Feedback, StateInitializer},
 };
-use libafl_bolts::{
-    Named,
-    tuples::MatchName,
-};
+use libafl_bolts::{Named, tuples::MatchName};
 use serde::{Deserialize, Serialize};
 
 pub const PASSEDFEEDBACK_PREFIX: &str = "passedfeedback_metadata_";

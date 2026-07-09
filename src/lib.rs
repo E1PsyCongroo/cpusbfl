@@ -64,6 +64,8 @@ struct Arguments {
     // SBFL options
     #[clap(default_value_t = 10, long)]
     top_pass: u64,
+    #[clap(default_value_t = fuzzer::Selection::Sort, long, value_enum)]
+    selection: fuzzer::Selection,
     #[clap(default_value_t = 10, long)]
     top_sus: u64,
     #[clap(long)]
@@ -178,6 +180,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             args.mutator_window_size,
             args.cover_distance_weight,
             args.top_pass,
+            args.selection,
             args.save_trace,
             &init_case,
             &args.output,

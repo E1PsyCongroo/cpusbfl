@@ -1,8 +1,9 @@
 use std::borrow::Cow;
 
 use clap::ValueEnum;
-use libafl::prelude::*;
+use libafl::{HasMetadata, corpus::Corpus, prelude::*, state::HasCorpus};
 use libafl_bolts::{Named, rands::Rand};
+use serde::{Deserialize, Serialize};
 
 use crate::elf::*;
 use crate::inst::*;
@@ -35,11 +36,19 @@ struct LastWindowCandidate {
     weight: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LastWindowMutationMetadata {
+    pub candidate_idxs: Vec<usize>,
+}
+
+libafl_bolts::impl_serdeany!(LastWindowMutationMetadata);
+
 #[derive(Debug)]
 pub(crate) struct LastWindowMutator {
     candidates: Vec<LastWindowCandidate>,
     total_weight: u64,
     iters: u64,
+    mutated_candidate_idxs: Vec<usize>,
 }
 
 impl LastWindowMutator {
@@ -118,6 +127,7 @@ impl LastWindowMutator {
             candidates,
             total_weight,
             iters,
+            mutated_candidate_idxs: Vec::new(),
         })
     }
 
@@ -167,6 +177,7 @@ impl LastWindowMutator {
         let dst = &mut bytes[candidate.offset..mutated_end];
 
         Self::fill_random_bytes(state.rand_mut(), dst);
+        self.mutated_candidate_idxs.push(candidate_idx);
 
         Ok(MutationResult::Mutated)
     }
@@ -174,10 +185,12 @@ impl LastWindowMutator {
 
 impl<I, S> Mutator<I, S> for LastWindowMutator
 where
-    S: HasRand,
+    S: HasRand + HasCorpus<I>,
     I: HasMutatorBytes,
 {
     fn mutate(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error> {
+        self.mutated_candidate_idxs.clear();
+
         let mut r = MutationResult::Skipped;
         for _ in 0..self.iters {
             let outcome = self.mutate_one(state, input)?;
@@ -189,7 +202,17 @@ where
     }
 
     #[inline]
-    fn post_exec(&mut self, _state: &mut S, _new_corpus_id: Option<CorpusId>) -> Result<(), Error> {
+    fn post_exec(&mut self, state: &mut S, new_corpus_id: Option<CorpusId>) -> Result<(), Error> {
+        if let Some(id) = new_corpus_id
+            && !self.mutated_candidate_idxs.is_empty()
+        {
+            let mut testcase = state.corpus_mut().get(id)?.borrow_mut();
+            testcase.add_metadata(LastWindowMutationMetadata {
+                candidate_idxs: self.mutated_candidate_idxs.clone(),
+            });
+        }
+
+        self.mutated_candidate_idxs.clear();
         Ok(())
     }
 }
