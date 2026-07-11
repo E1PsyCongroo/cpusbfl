@@ -15,14 +15,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     coverage::{Coverage, CoveragePoint},
-    observer::coverage_observer::CoverageObserver,
+    observer::CoverageObserver,
 };
 
-pub const COVERAGEFEEDBACK_PREFIX: &str = "coveragefeedback_metadata_";
+const COVERAGEFEEDBACK_PREFIX: &str = "coveragefeedback_metadata_";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(bound(serialize = "T: CoveragePoint", deserialize = "T: CoveragePoint"))]
-pub struct CoverageMetadata<T>
+pub(crate) struct CoverageMetadata<T>
 where
     T: CoveragePoint,
 {
@@ -33,7 +33,7 @@ libafl_bolts::impl_serdeany!(CoverageMetadata<T: CoveragePoint>, <bool>, <u8>, <
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(bound(serialize = "T: CoveragePoint", deserialize = "T: CoveragePoint"))]
-pub struct CoverageFeedback<T>
+pub(crate) struct CoverageFeedback<T>
 where
     T: CoveragePoint,
 {
@@ -48,7 +48,7 @@ where
     T: CoveragePoint,
 {
     #[must_use]
-    pub fn new(observer: &CoverageObserver<T>) -> Self {
+    pub(crate) fn new(observer: &CoverageObserver<T>) -> Self {
         Self {
             name: Cow::from(COVERAGEFEEDBACK_PREFIX.to_string() + observer.name()),
             o_ref: observer.handle(),

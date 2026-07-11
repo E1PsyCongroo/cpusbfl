@@ -7,14 +7,14 @@ use std::{
 use serde::Serialize;
 use sv_parser::{Define, NodeEvent, RefNode, SyntaxTree, parse_sv, unwrap_node};
 
-use crate::block::{Block, DataFlowBlock, dfb};
+use super::{Block, DataFlowBlock, parse_module_blocks};
 
-pub struct BlockManager {
+pub(crate) struct BlockManager {
     blocks_by_scope: HashMap<String, (Vec<DataFlowBlock>, Arc<SyntaxTree>)>,
 }
 
 impl BlockManager {
-    pub fn new<P: AsRef<Path>>(
+    pub(crate) fn new<P: AsRef<Path>>(
         rtl_files: &[P],
         includes: &[PathBuf],
         top_module: &str,
@@ -60,7 +60,7 @@ impl BlockManager {
         while let Some((cur_scope, cur_tree)) = queue.pop_front() {
             let mname = get_module_name(&cur_tree).unwrap_or_else(|| "unknown".to_string());
             let code = module_code_map.get(&mname).cloned().unwrap_or_default();
-            let blocks = dfb::parse_module_blocks(&cur_tree, &cur_scope, &code);
+            let blocks = parse_module_blocks(&cur_tree, &cur_scope, &code);
             blocks_by_scope.insert(cur_scope.clone(), (blocks, cur_tree.clone()));
 
             // Find submodule instantiations
@@ -98,14 +98,14 @@ impl BlockManager {
         Self { blocks_by_scope }
     }
 
-    pub fn get_all_blocks(&self) -> Vec<&DataFlowBlock> {
+    pub(crate) fn get_all_blocks(&self) -> Vec<&DataFlowBlock> {
         self.blocks_by_scope
             .values()
             .flat_map(|(blocks, _)| blocks.iter())
             .collect()
     }
 
-    pub fn dump_blocks_distribution(
+    pub(crate) fn dump_blocks_distribution(
         &self,
         output_path: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {

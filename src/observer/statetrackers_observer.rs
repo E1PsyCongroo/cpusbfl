@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::state_tracker::*;
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct StateTrackersObserver {
+pub(crate) struct StateTrackersObserver {
     name: Cow<'static, str>,
     trackers: OwnedPtr<StateTrackers>,
     window_size: usize,
@@ -24,7 +24,7 @@ pub struct StateTrackersObserver {
 }
 
 impl StateTrackersObserver {
-    pub unsafe fn from_raw(name: &'static str, trackers: &StateTrackers, window_size: u64) -> Self {
+    pub(crate) unsafe fn from_raw(name: &'static str, trackers: &StateTrackers, window_size: u64) -> Self {
         Self {
             name: Cow::Borrowed(name),
             trackers: unsafe { OwnedPtr::from_raw(trackers) },
@@ -33,7 +33,7 @@ impl StateTrackersObserver {
         }
     }
 
-    pub fn get_state_tracker(&self) -> StateTrackers {
+    pub(crate) fn get_state_tracker(&self) -> StateTrackers {
         let trackers = self.trackers.as_ref();
 
         let mut pc_tracker = trackers.pc_tracker.clone();

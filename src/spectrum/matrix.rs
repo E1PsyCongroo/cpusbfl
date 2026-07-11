@@ -17,34 +17,18 @@ pub(crate) enum SpectrumMetric {
     Ample,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct CoverageStats {
-    pub ef: usize, // executed by failed tests
-    pub ep: usize, // executed by passed tests
-    pub nf: usize, // not executed by failed tests
-    pub np: usize, // not executed by passed tests
-}
-
-impl SpectrumMetric {
-    pub fn all() -> Vec<&'static str> {
-        vec![
-            "tarantula",
-            "ochiai",
-            "jaccard",
-            "dstar",
-            "gp19",
-            "barinel",
-            "crosstab",
-            "zoltar",
-            "ample",
-        ]
-    }
-}
-
 impl Default for SpectrumMetric {
     fn default() -> Self {
         SpectrumMetric::Ochiai
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CoverageStats {
+    ef: usize, // executed by failed tests
+    ep: usize, // executed by passed tests
+    nf: usize, // not executed by failed tests
+    np: usize, // not executed by passed tests
 }
 
 pub(crate) fn calculate_suspiciousness(
@@ -63,7 +47,7 @@ fn calculate_coverage_stats(cover_name: &str, case_metas: &[CaseMetadata]) -> Ve
     assert!(
         case_metas
             .iter()
-            .all(|case_cov| case_cov.covers.get(cover_name).len() == len)
+            .all(|case_cov| case_cov.covers.len(cover_name) == len)
     );
 
     let mut cover_stats = vec![
@@ -80,14 +64,10 @@ fn calculate_coverage_stats(cover_name: &str, case_metas: &[CaseMetadata]) -> Ve
         covers,
         state_trackers: _,
         is_passed,
+        mutated_pcs: _,
     } in case_metas
     {
-        for (i, covered) in covers
-            .get(cover_name)
-            .covered_bits()
-            .into_iter()
-            .enumerate()
-        {
+        for (i, covered) in covers.covered_bits(cover_name).into_iter().enumerate() {
             match (covered, is_passed) {
                 (true, false) => cover_stats[i].ef += 1,
                 (true, true) => cover_stats[i].ep += 1,

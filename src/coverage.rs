@@ -9,7 +9,10 @@ use std::{
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-use crate::harness::{set_cover_feedback as ffi_set_cover_feedback, *};
+use crate::{
+    coverage::CoverageKind::U64,
+    harness::{set_cover_feedback as ffi_set_cover_feedback, *},
+};
 
 unsafe fn set_cover_feedback(cover_name: &str) {
     unsafe { ffi_set_cover_feedback(CString::new(cover_name.as_bytes()).unwrap().as_ptr()) }
@@ -23,11 +26,17 @@ pub(crate) trait CoveragePoint:
     }
 
     fn as_u64(self) -> u64;
+
+    fn saturating_sub(self, rhs: Self) -> Self;
 }
 
 impl CoveragePoint for bool {
     fn as_u64(self) -> u64 {
         self as u64
+    }
+
+    fn saturating_sub(self, rhs: Self) -> Self {
+        self && !rhs
     }
 }
 
@@ -35,11 +44,19 @@ impl CoveragePoint for u8 {
     fn as_u64(self) -> u64 {
         self as u64
     }
+
+    fn saturating_sub(self, rhs: Self) -> Self {
+        self.saturating_sub(rhs)
+    }
 }
 
 impl CoveragePoint for u64 {
     fn as_u64(self) -> u64 {
         self
+    }
+
+    fn saturating_sub(self, rhs: Self) -> Self {
+        self.saturating_sub(rhs)
     }
 }
 
@@ -104,6 +121,20 @@ where
     pub fn covered_counts(&self) -> Vec<u64> {
         self.point_counts.iter().map(|&p| p.as_u64()).collect()
     }
+
+    pub fn saturating_sub(&self, rhs: &Self) -> Self {
+        assert_eq!(self.len(), rhs.len());
+
+        Self {
+            name: self.name.clone(),
+            point_counts: self
+                .as_slice()
+                .iter()
+                .zip(rhs.as_slice().iter())
+                .map(|(l, r)| l.saturating_sub(*r))
+                .collect(),
+        }
+    }
 }
 
 impl<T> Hash for Coverage<T>
@@ -130,7 +161,7 @@ pub(crate) enum AnyCoverage {
 }
 
 impl AnyCoverage {
-    pub fn new(kind: CoverageKind, name: &str) -> Self {
+    fn new(kind: CoverageKind, name: &str) -> Self {
         match kind {
             CoverageKind::Bool => Self::Bool(Coverage::<bool>::new(name)),
             CoverageKind::U8 => Self::U8(Coverage::<u8>::new(name)),
@@ -138,7 +169,7 @@ impl AnyCoverage {
         }
     }
 
-    pub fn len(&self) -> usize {
+    fn len(&self) -> usize {
         match self {
             Self::Bool(c) => c.len(),
             Self::U8(c) => c.len(),
@@ -146,7 +177,7 @@ impl AnyCoverage {
         }
     }
 
-    pub fn update(&mut self) {
+    fn update(&mut self) {
         match self {
             Self::Bool(c) => c.update(),
             Self::U8(c) => c.update(),
@@ -154,7 +185,7 @@ impl AnyCoverage {
         }
     }
 
-    pub fn covered_bits(&self) -> Vec<bool> {
+    fn covered_bits(&self) -> Vec<bool> {
         match self {
             Self::Bool(c) => c.covered_bits(),
             Self::U8(c) => c.covered_bits(),
@@ -162,11 +193,20 @@ impl AnyCoverage {
         }
     }
 
-    pub fn covered_counts(&self) -> Vec<u64> {
+    fn covered_counts(&self) -> Vec<u64> {
         match self {
             Self::Bool(c) => c.covered_counts(),
             Self::U8(c) => c.covered_counts(),
             Self::U64(c) => c.covered_counts(),
+        }
+    }
+
+    fn saturating_sub(&self, rhs: &AnyCoverage) -> Self {
+        match (self, rhs) {
+            (Self::Bool(lhs), Self::Bool(rhs)) => Self::Bool(lhs.saturating_sub(rhs)),
+            (Self::U8(lhs), Self::U8(rhs)) => Self::U8(lhs.saturating_sub(rhs)),
+            (Self::U64(lhs), Self::U64(rhs)) => Self::U64(lhs.saturating_sub(rhs)),
+            _ => panic!(""),
         }
     }
 }
@@ -209,10 +249,6 @@ impl Coverages {
         Self { covers }
     }
 
-    pub fn len(&self) -> usize {
-        self.covers.len()
-    }
-
     pub fn iter(&self) -> impl Iterator<Item = (&String, &AnyCoverage)> {
         self.covers.iter()
     }
@@ -246,6 +282,29 @@ impl Coverages {
             self.update(&cover_name);
         }
     }
+
+    pub fn len(&self, cover_name: &str) -> usize {
+        self.get(cover_name).len()
+    }
+
+    pub fn covered_bits(&self, cover_name: &str) -> Vec<bool> {
+        self.get(cover_name).covered_bits()
+    }
+
+    pub fn covered_counts(&self, cover_name: &str) -> Vec<u64> {
+        self.get(cover_name).covered_counts()
+    }
+
+    pub fn saturating_sub(&self, rhs: &Coverages) -> Self {
+        let mut covers = HashMap::new();
+        for cover_name in self.names() {
+            let rhs_cover = rhs.get(&cover_name);
+            let new_cover = self.get(&cover_name).saturating_sub(rhs_cover);
+            covers.insert(cover_name, new_cover);
+        }
+
+        Self { covers }
+    }
 }
 
 impl Hash for Coverages {
@@ -266,7 +325,7 @@ struct AccumulatedCoverages {
 
 impl AccumulatedCoverages {
     fn new(cover_names: &[String]) -> Self {
-        let mut covers = cover_names
+        let covers = cover_names
             .iter()
             .map(|cover_name| (cover_name.clone(), Vec::new()))
             .collect::<HashMap<String, Vec<bool>>>();

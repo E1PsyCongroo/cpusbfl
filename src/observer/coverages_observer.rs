@@ -12,14 +12,14 @@ use serde::{Deserialize, Serialize};
 use crate::coverage::Coverages;
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct CoveragesObserver {
+pub(crate) struct CoveragesObserver {
     name: Cow<'static, str>,
     covers: OwnedPtr<Coverages>,
     hash: Option<u64>,
 }
 
 impl CoveragesObserver {
-    pub unsafe fn from_raw(name: &'static str, covers: &Coverages) -> Self {
+    pub(crate) unsafe fn from_raw(name: &'static str, covers: &Coverages) -> Self {
         Self {
             name: Cow::Borrowed(name),
             covers: unsafe { OwnedPtr::from_raw(covers) },
@@ -27,7 +27,7 @@ impl CoveragesObserver {
         }
     }
 
-    pub fn get_coverages(&self) -> &Coverages {
+    pub(crate) fn get_coverages(&self) -> &Coverages {
         self.covers.as_ref()
     }
 }

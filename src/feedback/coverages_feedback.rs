@@ -13,19 +13,19 @@ use libafl_bolts::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{coverage::Coverages, observer::coverages_observer::CoveragesObserver};
+use crate::{coverage::Coverages, observer::CoveragesObserver};
 
-pub const COVERAGSEFEEDBACK_PREFIX: &str = "coveragesfeedback_metadata_";
+const COVERAGSEFEEDBACK_PREFIX: &str = "coveragesfeedback_metadata_";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CoveragesMetadata {
-    pub covers: Coverages,
+pub(crate) struct CoveragesMetadata {
+    pub(crate) covers: Coverages,
 }
 
 libafl_bolts::impl_serdeany!(CoveragesMetadata);
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct CoveragesFeedback {
+pub(crate) struct CoveragesFeedback {
     name: Cow<'static, str>,
     o_ref: Handle<CoveragesObserver>,
     inner: NewHashFeedback<CoveragesObserver>,
@@ -34,7 +34,7 @@ pub struct CoveragesFeedback {
 
 impl CoveragesFeedback {
     #[must_use]
-    pub fn new(observer: &CoveragesObserver) -> Self {
+    pub(crate) fn new(observer: &CoveragesObserver) -> Self {
         Self {
             name: Cow::from(COVERAGSEFEEDBACK_PREFIX.to_string() + observer.name()),
             o_ref: observer.handle(),
@@ -108,8 +108,7 @@ where
             log::debug!("cover points of {cover_name}:");
             for (point, count) in pending
                 .covers
-                .get(&cover_name)
-                .covered_counts()
+                .covered_counts(&cover_name)
                 .into_iter()
                 .enumerate()
             {

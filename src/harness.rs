@@ -112,24 +112,6 @@ pub(crate) fn sim_run_multiple(
     return ret;
 }
 
-pub static mut SAVE_ERRORS: bool = false;
-
-pub(crate) fn sim_run_with_trackers(input: &BytesInput) -> ExitKind {
-    let ret = sim_run_from_memory(input, false, false);
-
-    trackers().pc_tracker.update();
-    trackers().arch_int_reg_tracker.update();
-    trackers().csr_tracker.update();
-
-    io::stdout().flush().unwrap();
-
-    if ret != 0 {
-        ExitKind::Crash
-    } else {
-        ExitKind::Ok
-    }
-}
-
 pub(crate) fn sim_with_max_inst<T>(max_inst: usize, f: impl FnOnce() -> T) -> T {
     let original_args = SIM_ARGS
         .get()
@@ -156,6 +138,7 @@ pub(crate) fn sim_with_max_inst<T>(max_inst: usize, f: impl FnOnce() -> T) -> T 
     ret
 }
 
+pub static mut SAVE_ERRORS: bool = false;
 pub(crate) fn fuzz_harness(input: &BytesInput) -> ExitKind {
     let ret = sim_run_from_memory(input, true, true);
 

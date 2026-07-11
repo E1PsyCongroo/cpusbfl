@@ -82,7 +82,7 @@ fn try_jal_to_failure_site(
     validate_exact_trace(BytesInput::from(bytes), original, max_inst)
 }
 
-pub fn strip_irrelevant_suffix(
+pub(super) fn strip_irrelevant_suffix(
     input: &[u8],
     original: &StateTrackers,
 ) -> Option<(BytesInput, StateTrackers)> {

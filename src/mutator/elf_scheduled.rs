@@ -11,14 +11,14 @@ use libafl::{
     state::HasRand,
 };
 
-use libafl_bolts::{HasLen, Named, Truncate, tuples::NamedTuple};
+use libafl_bolts::{HasLen, Named, tuples::NamedTuple};
 use lief::generic::Section;
 
 use crate::elf::*;
 
 /// A [`Mutator`] that stacks embedded mutations in a havoc manner on each call.
 #[derive(Debug)]
-pub struct ELFHavocScheduledMutator<MT> {
+pub(crate) struct ELFHavocScheduledMutator<MT> {
     name: Cow<'static, str>,
     mutator: HavocScheduledMutator<MT>,
     text_section_max_size: usize,
@@ -115,7 +115,7 @@ where
     MT: NamedTuple,
 {
     /// Create a new [`ELFHavocScheduledMutator`] instance specifying mutations
-    pub fn new<I>(mutations: MT, init_bytes: &I) -> Result<Self, Box<dyn std::error::Error>>
+    pub(crate) fn new<I>(mutations: MT, init_bytes: &I) -> Result<Self, Box<dyn std::error::Error>>
     where
         I: HasMutatorBytes,
     {
@@ -137,7 +137,7 @@ where
 
     /// Create a new [`ELFHavocScheduledMutator`] instance specifying mutations and the maximun number of iterations
     #[inline]
-    pub fn with_max_stack_pow<I>(
+    pub(crate) fn with_max_stack_pow<I>(
         mutations: MT,
         init_bytes: &I,
         max_stack_pow: usize,

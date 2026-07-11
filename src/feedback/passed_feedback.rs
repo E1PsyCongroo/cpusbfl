@@ -9,24 +9,24 @@ use libafl::{
 use libafl_bolts::{Named, tuples::MatchName};
 use serde::{Deserialize, Serialize};
 
-pub const PASSEDFEEDBACK_PREFIX: &str = "passedfeedback_metadata_";
+const PASSEDFEEDBACK_PREFIX: &str = "passedfeedback_metadata_";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PassedMetadata {
-    pub is_passed: bool,
+pub(crate) struct PassedMetadata {
+    pub(crate) is_passed: bool,
 }
 
 libafl_bolts::impl_serdeany!(PassedMetadata);
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct PassedFeedback {
+pub(crate) struct PassedFeedback {
     name: Cow<'static, str>,
     pending: Option<PassedMetadata>,
 }
 
 impl PassedFeedback {
     #[must_use]
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             name: Cow::from(PASSEDFEEDBACK_PREFIX.to_string()),
             pending: None,

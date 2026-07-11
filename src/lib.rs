@@ -39,8 +39,10 @@ struct Arguments {
     state: String,
     #[clap(default_value_t = false, long)]
     base_mutator: bool,
-    #[clap(default_value_t = false, short, long)]
-    reduce: bool,
+    #[clap(default_value_t = false, short = 'r', long, alias = "reduce")]
+    reduce_insts: bool,
+    #[clap(default_value_t = false, long)]
+    reduce_cover: bool,
     #[clap(default_value_t = false, long)]
     save_reduce: bool,
     #[clap(default_value_t = false, long)]
@@ -53,8 +55,8 @@ struct Arguments {
     tracker_window_size: u64,
     #[clap(default_value_t = 20, long)]
     mutator_window_size: u64,
-    #[clap(default_value_t = mutator::lastwindow_mutator::MutationStrategy::Uniform, value_enum, long)]
-    mutator_weight_strategy: mutator::lastwindow_mutator::MutationStrategy,
+    #[clap(default_value_t = mutator::MutationStrategy::Uniform, value_enum, long)]
+    mutator_weight_strategy: mutator::MutationStrategy,
     #[clap(default_value_t = 0.5f64, value_parser = parse_distance_weight, long)]
     cover_distance_weight: f64,
     #[clap(default_value_t = String::from("./corpus"), long)]
@@ -76,8 +78,8 @@ struct Arguments {
     top_module: Option<String>,
     #[clap(long)]
     top_scope: Option<String>,
-    #[clap(default_value_t = spectrum::matrix::SpectrumMetric::Ochiai, long, value_enum)]
-    metric: spectrum::matrix::SpectrumMetric,
+    #[clap(default_value_t = spectrum::SpectrumMetric::Ochiai, long, value_enum)]
+    metric: spectrum::SpectrumMetric,
     // Run options
     #[clap(default_value_t = 1, long)]
     repeat: usize,
@@ -141,8 +143,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.fuzzing {
         let sbfl_start_time = utils::process_cpu_time_now()?;
         let input_case = utils::load_initial_case(&args.corpus_input)?;
-        let init_case = if args.reduce {
-            harness::sim_run_with_trackers(&input_case);
+        let init_case = if args.reduce_insts {
+            harness::fuzz_harness(&input_case);
             let original_trackers = state_tracker::trackers().clone();
             let reducing_start_time = utils::process_cpu_time_now()?;
             let reduced_case = reduce::reduce_fault_case(
@@ -181,6 +183,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             args.cover_distance_weight,
             args.top_pass,
             args.selection,
+            args.reduce_cover,
             args.save_trace,
             &init_case,
             &args.output,
@@ -189,7 +192,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             bugloc::report_result(
                 args.top_sus,
                 args.metric,
-                &passed_cov,
+                passed_cov,
                 &args.rtl_path,
                 &args.include_paths,
                 &args.top_module,

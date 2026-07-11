@@ -5,13 +5,13 @@ use libafl_bolts::Named;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct PassedObserver {
+pub(crate) struct PassedObserver {
     name: Cow<'static, str>,
     passed: Option<bool>,
 }
 
 impl PassedObserver {
-    pub fn new(name: &'static str) -> Self {
+    pub(crate) fn new(name: &'static str) -> Self {
         Self {
             name: Cow::Borrowed(name),
             passed: None,

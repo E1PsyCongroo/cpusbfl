@@ -6,15 +6,15 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::block::{dfb::*, mgr::*, *};
+use crate::block::*;
 use crate::coverage::*;
 use crate::fuzzer::*;
-use crate::spectrum::matrix::*;
+use crate::spectrum::*;
 
 pub(crate) fn report_result(
     top_sus: u64,
     metric: SpectrumMetric,
-    case_metas: &[CaseMetadata],
+    case_metas: Vec<CaseMetadata>,
     rtl_path: &Option<String>,
     include_paths: &Option<Vec<String>>,
     top_module: &Option<String>,
@@ -33,10 +33,12 @@ pub(crate) fn report_result(
             ),
         };
 
+    let initial_case = case_metas.iter().find(|case| !case.is_passed).unwrap();
+
     let mut ranked_points = cover_names()
         .into_iter()
         .flat_map(|cover_name| {
-            calculate_suspiciousness(&cover_name, case_metas, metric)
+            calculate_suspiciousness(&cover_name, &case_metas, metric)
                 .into_iter()
                 .enumerate()
                 .map(move |(idx, sus)| (cover_name.clone(), idx, sus))
@@ -52,7 +54,6 @@ pub(crate) fn report_result(
         })
         .transpose()?;
 
-    let initial_case = case_metas.iter().find(|case| !case.is_passed).unwrap();
     info_and_writeln(
         &mut result_fs,
         format_args!("Suspiciousness of cover points:"),
@@ -63,8 +64,7 @@ pub(crate) fn report_result(
         assert!(
             initial_case
                 .covers
-                .get(&cover_name)
-                .covered_bits()
+                .covered_bits(&cover_name)
                 .get(*point)
                 .unwrap(),
             "point {} not in initial case",

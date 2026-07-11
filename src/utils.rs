@@ -60,8 +60,7 @@ pub fn store_testcase(
             writeln!(cover_file, "cover points of {cover_name}:")?;
             for (point, count) in metadata
                 .covers
-                .get(&cover_name)
-                .covered_counts()
+                .covered_counts(&cover_name)
                 .into_iter()
                 .enumerate()
             {

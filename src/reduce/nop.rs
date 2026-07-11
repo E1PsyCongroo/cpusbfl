@@ -41,7 +41,8 @@ fn collect_code_insts(input: &[u8], sections: &[lief::elf::Section]) -> Vec<Code
     insts
 }
 
-fn build_nopped_input(
+
+pub(super) fn build_nopped_input(
     input: &[u8],
     insts: &[CodeInst],
     executed: &HashSet<u64>,
@@ -90,7 +91,7 @@ fn try_keep_window(
     )
 }
 
-pub fn nop_unexecuted_insts(
+pub(super) fn nop_unexecuted_insts(
     input: &[u8],
     original: &StateTrackers,
 ) -> Option<(BytesInput, StateTrackers)> {

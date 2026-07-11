@@ -1,7 +1,8 @@
 use std::borrow::Cow;
+use std::collections::HashSet;
 
 use clap::ValueEnum;
-use libafl::{HasMetadata, corpus::Corpus, prelude::*, state::HasCorpus};
+use libafl::{HasMetadata, prelude::*};
 use libafl_bolts::{Named, rands::Rand};
 use serde::{Deserialize, Serialize};
 
@@ -31,14 +32,15 @@ impl Default for MutationStrategy {
 
 #[derive(Debug, Clone)]
 struct LastWindowCandidate {
+    pc: u64,
     offset: usize,
     len: usize,
     weight: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LastWindowMutationMetadata {
-    pub candidate_idxs: Vec<usize>,
+pub(crate) struct LastWindowMutationMetadata {
+    pub(crate) mutated_pcs: HashSet<u64>,
 }
 
 libafl_bolts::impl_serdeany!(LastWindowMutationMetadata);
@@ -48,7 +50,7 @@ pub(crate) struct LastWindowMutator {
     candidates: Vec<LastWindowCandidate>,
     total_weight: u64,
     iters: u64,
-    mutated_candidate_idxs: Vec<usize>,
+    mutated_pcs: HashSet<u64>,
 }
 
 impl LastWindowMutator {
@@ -109,6 +111,7 @@ impl LastWindowMutator {
                 .ok_or("LastWindowMutator total_weight overflow")?;
 
             candidates.push(LastWindowCandidate {
+                pc,
                 offset,
                 len: inst_len,
                 weight,
@@ -127,7 +130,7 @@ impl LastWindowMutator {
             candidates,
             total_weight,
             iters,
-            mutated_candidate_idxs: Vec::new(),
+            mutated_pcs: HashSet::new(),
         })
     }
 
@@ -177,7 +180,7 @@ impl LastWindowMutator {
         let dst = &mut bytes[candidate.offset..mutated_end];
 
         Self::fill_random_bytes(state.rand_mut(), dst);
-        self.mutated_candidate_idxs.push(candidate_idx);
+        self.mutated_pcs.insert(candidate.pc);
 
         Ok(MutationResult::Mutated)
     }
@@ -185,11 +188,11 @@ impl LastWindowMutator {
 
 impl<I, S> Mutator<I, S> for LastWindowMutator
 where
-    S: HasRand + HasCorpus<I>,
+    S: HasRand + HasTestcase<I>,
     I: HasMutatorBytes,
 {
     fn mutate(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error> {
-        self.mutated_candidate_idxs.clear();
+        self.mutated_pcs.clear();
 
         let mut r = MutationResult::Skipped;
         for _ in 0..self.iters {
@@ -204,15 +207,22 @@ where
     #[inline]
     fn post_exec(&mut self, state: &mut S, new_corpus_id: Option<CorpusId>) -> Result<(), Error> {
         if let Some(id) = new_corpus_id
-            && !self.mutated_candidate_idxs.is_empty()
+            && !self.mutated_pcs.is_empty()
         {
-            let mut testcase = state.corpus_mut().get(id)?.borrow_mut();
-            testcase.add_metadata(LastWindowMutationMetadata {
-                candidate_idxs: self.mutated_candidate_idxs.clone(),
-            });
+            let mut testcase = state.testcase_mut(id)?;
+            let mut mutated_pcs = match testcase.parent_id() {
+                Some(parent_id) => state
+                    .testcase(parent_id)?
+                    .metadata::<LastWindowMutationMetadata>()
+                    .map(|m| m.mutated_pcs.clone())
+                    .unwrap_or(HashSet::new()),
+                None => HashSet::new(),
+            };
+            mutated_pcs.extend(self.mutated_pcs.iter());
+            testcase.add_metadata(LastWindowMutationMetadata { mutated_pcs });
         }
 
-        self.mutated_candidate_idxs.clear();
+        self.mutated_pcs.clear();
         Ok(())
     }
 }

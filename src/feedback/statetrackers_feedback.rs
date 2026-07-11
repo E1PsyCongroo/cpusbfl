@@ -13,19 +13,19 @@ use libafl_bolts::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{observer::statetrackers_observer::StateTrackersObserver, state_tracker::*};
+use crate::{observer::StateTrackersObserver, state_tracker::*};
 
-pub const STATETRACKERSFEEDBACK_PREFIX: &str = "statetrackersfeedback_metadata_";
+const STATETRACKERSFEEDBACK_PREFIX: &str = "statetrackersfeedback_metadata_";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StateTrackersMetadata {
-    pub trackers: StateTrackers,
+pub(crate) struct StateTrackersMetadata {
+    pub(crate) trackers: StateTrackers,
 }
 
 libafl_bolts::impl_serdeany!(StateTrackersMetadata);
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct StateTrackersFeedback {
+pub(crate) struct StateTrackersFeedback {
     name: Cow<'static, str>,
     o_ref: Handle<StateTrackersObserver>,
     inner: NewHashFeedback<StateTrackersObserver>,
@@ -34,7 +34,7 @@ pub struct StateTrackersFeedback {
 
 impl StateTrackersFeedback {
     #[must_use]
-    pub fn new(observer: &StateTrackersObserver) -> Self {
+    pub(crate) fn new(observer: &StateTrackersObserver) -> Self {
         Self {
             name: Cow::from(STATETRACKERSFEEDBACK_PREFIX.to_string() + observer.name()),
             o_ref: observer.handle(),

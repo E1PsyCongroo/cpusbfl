@@ -389,7 +389,7 @@ fn try_strip_prefix_at(
     validate_exact_trace(bytes, original, max_inst)
 }
 
-pub fn strip_irrelevant_prefix(
+pub(super) fn strip_irrelevant_prefix(
     input: &[u8],
     original: &StateTrackers,
 ) -> Option<(BytesInput, StateTrackers)> {

@@ -16,7 +16,7 @@ use crate::state_tracker::*;
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(bound(serialize = "T: State", deserialize = "T: State",))]
-pub struct StateTrackerObserver<T>
+pub(crate) struct StateTrackerObserver<T>
 where
     T: State,
 {
@@ -29,7 +29,7 @@ impl<T> StateTrackerObserver<T>
 where
     T: State,
 {
-    pub unsafe fn from_raw(name: &'static str, tracker: &StateTracker<T>) -> Self {
+    pub(crate) unsafe fn from_raw(name: &'static str, tracker: &StateTracker<T>) -> Self {
         Self {
             name: Cow::Borrowed(name),
             tracker: unsafe { OwnedPtr::from_raw(tracker) },
@@ -37,7 +37,7 @@ where
         }
     }
 
-    pub fn get_state_tracker(&self) -> &StateTracker<T> {
+    pub(crate) fn get_state_tracker(&self) -> &StateTracker<T> {
         self.tracker.as_ref()
     }
 }

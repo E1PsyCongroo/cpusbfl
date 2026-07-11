@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::{any::type_name, io::Write};
 
 use clap::ValueEnum;
@@ -7,13 +8,11 @@ use libafl_bolts::{Named, current_nanos, rands::StdRand, tuples::tuple_list};
 use rand::seq::SliceRandom;
 
 use crate::coverage::*;
-use crate::feedback::{coverages_feedback::*, passed_feedback::*, statetrackers_feedback::*};
-use crate::harness::{SIM_ARGS, fuzz_harness};
-use crate::mutator::{
-    elf_scheduled::ELFHavocScheduledMutator,
-    lastwindow_mutator::{LastWindowMutator, MutationStrategy},
-};
-use crate::observer::{coverages_observer::*, statetrackers_observer::*};
+use crate::feedback::*;
+use crate::harness::*;
+use crate::mutator::*;
+use crate::observer::*;
+use crate::reduce::*;
 use crate::similarity::*;
 use crate::state_tracker::*;
 use crate::utils::*;
@@ -57,6 +56,7 @@ pub(crate) struct CaseMetadata {
     pub covers: Coverages,
     pub state_trackers: StateTrackers,
     pub is_passed: bool,
+    pub mutated_pcs: Option<HashSet<u64>>,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -79,11 +79,13 @@ fn emit_top_passed_testcases(
         StdRand,
         InMemoryCorpus<ValueInput<Vec<u8>>>,
     >,
-    init_metadata: CaseMetadata,
+    mut init_metadata: CaseMetadata,
     cover_weight: f64,
     top_n: u64,
     selection: Selection,
+    reduce_cover: bool,
     save_trace: bool,
+    init_input: &BytesInput,
     output: &Option<String>,
 ) -> Result<Vec<CaseMetadata>, Box<dyn std::error::Error>> {
     let corpus = state.corpus_mut();
@@ -93,8 +95,9 @@ fn emit_top_passed_testcases(
         .names()
         .into_iter()
         .map(|cover_name| {
-            let cover = init_metadata.covers.get(&cover_name);
-            (cover_name, cover.len(), cover.covered_counts())
+            let cover_len = init_metadata.covers.len(&cover_name);
+            let cover_counts = init_metadata.covers.covered_counts(&cover_name);
+            (cover_name, cover_len, cover_counts)
         })
         .collect::<Vec<_>>();
     let init_metadata_core_state = init_metadata
@@ -120,23 +123,30 @@ fn emit_top_passed_testcases(
             continue;
         }
 
-        let cover = *testcase
+        let covers = testcase
             .remove_metadata::<CoveragesMetadata>()
-            .ok_or_else(|| format!("{} not found", type_name::<CoveragesMetadata>()))?;
-        let tracker = *testcase
+            .ok_or_else(|| format!("{} not found", type_name::<CoveragesMetadata>()))?
+            .covers;
+        let trackers = testcase
             .remove_metadata::<StateTrackersMetadata>()
-            .ok_or_else(|| format!("{} not found", type_name::<StateTrackersMetadata>()))?;
+            .ok_or_else(|| format!("{} not found", type_name::<StateTrackersMetadata>()))?
+            .trackers;
+
+        let mutated_pcs = testcase
+            .remove_metadata::<LastWindowMutationMetadata>()
+            .map(|m| m.mutated_pcs);
 
         let metadata = CaseMetadata {
-            covers: cover.covers,
-            state_trackers: tracker.trackers,
+            covers: covers,
+            state_trackers: trackers,
             is_passed: passed,
+            mutated_pcs: mutated_pcs,
         };
 
         let cover_distance = init_metadata_coverd_counts
             .iter()
             .map(|(cov_name, cov_len, init_counts)| {
-                let metadata_counts = metadata.covers.get(cov_name).covered_counts();
+                let metadata_counts = metadata.covers.covered_counts(cov_name);
                 let dis = log_euclidean_distance(&init_counts, &metadata_counts)
                     / (*cov_len as f64).sqrt();
                 dis
@@ -228,7 +238,16 @@ fn emit_top_passed_testcases(
         selection
     );
 
-    let top_passed_cases: Vec<_> = passed_cases.into_iter().take(limit).collect();
+    let mut top_passed_cases: Vec<_> = passed_cases.into_iter().take(limit).collect();
+
+    if reduce_cover {
+        let init_pc_tracker = init_metadata.state_trackers.pc_tracker.clone();
+        reduce_init_case_coverage(init_input, &mut init_metadata);
+        for (_, input, metadata, _) in top_passed_cases.iter_mut() {
+            reduce_pass_case_coverage(input, &init_pc_tracker, metadata);
+        }
+    }
+
     for (rank, (id, input, metadata, distance)) in top_passed_cases.iter().enumerate() {
         log::info!(
             "Top {} passed testcase: corpus_id={}, distance={:.6}",
@@ -266,6 +285,7 @@ pub(crate) fn run_fuzzer(
     cover_weight: f64,
     top_n: u64,
     selection: Selection,
+    reduce_cover: bool,
     save_trace: bool,
     init_case: &BytesInput,
     output: &Option<String>,
@@ -334,6 +354,7 @@ pub(crate) fn run_fuzzer(
             covers: init_cover.covers.to_owned(),
             state_trackers: init_state.trackers.to_owned(),
             is_passed: init_passed,
+            mutated_pcs: None,
         };
     } else {
         return Err("Initial case was not accepted into the main corpus by feedback".into());
@@ -393,8 +414,7 @@ pub(crate) fn run_fuzzer(
         log::trace!("init_case cover points of {cover_name}:");
         for (point, count) in init_metadata
             .covers
-            .get(&cover_name)
-            .covered_counts()
+            .covered_counts(&cover_name)
             .into_iter()
             .enumerate()
         {
@@ -412,7 +432,9 @@ pub(crate) fn run_fuzzer(
         cover_weight,
         top_n,
         selection,
+        reduce_cover,
         save_trace,
+        init_case,
         output,
     )
 }

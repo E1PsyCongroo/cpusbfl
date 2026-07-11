@@ -126,23 +126,6 @@ impl ELFParser {
         Ok(ELFParser::from(elf))
     }
 
-    pub fn executable_section_containing_vma<'a>(
-        &'a self,
-        vma_start: u64,
-        vma_end: u64,
-    ) -> Option<&'a lief::elf::Section<'a>> {
-        self.borrow_executable_sections()
-            .iter()
-            .find(|s| section_contains_range(s, vma_start, vma_end))
-    }
-
-    pub fn executable_section_vma2offset(&self, vma_start: u64, vma_end: u64) -> Option<u64> {
-        let section = self.executable_section_containing_vma(vma_start, vma_end)?;
-        vma_start
-            .checked_sub(section.virtual_address())?
-            .checked_add(section.file_offset())
-    }
-
     pub fn vma2offset(&self, vma: u64) -> Result<u64, Box<dyn std::error::Error>> {
         self.borrow_elf()
             .virtual_address_to_offset(vma)

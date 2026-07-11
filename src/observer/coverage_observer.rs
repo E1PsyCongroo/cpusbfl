@@ -13,7 +13,7 @@ use crate::coverage::{Coverage, CoveragePoint};
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(bound(serialize = "T: CoveragePoint", deserialize = "T: CoveragePoint"))]
-pub struct CoverageObserver<T>
+pub(crate) struct CoverageObserver<T>
 where
     T: CoveragePoint,
 {
@@ -26,7 +26,7 @@ impl<T> CoverageObserver<T>
 where
     T: CoveragePoint,
 {
-    pub unsafe fn from_raw(name: &'static str, cover: &Coverage<T>) -> Self {
+    pub(crate) unsafe fn from_raw(name: &'static str, cover: &Coverage<T>) -> Self {
         Self {
             name: Cow::Borrowed(name),
             cover: unsafe { OwnedPtr::from_raw(cover) },
@@ -34,7 +34,7 @@ where
         }
     }
 
-    pub fn get_coverage(&self) -> &Coverage<T> {
+    pub(crate) fn get_coverage(&self) -> &Coverage<T> {
         self.cover.as_ref()
     }
 }

@@ -1,7 +1,8 @@
-use crate::block::{Block, BlockType, CircuitType};
 use sv_parser::{AlwaysKeyword, PortDirection, RefNode, SyntaxTree, unwrap_node};
 
-pub struct DataFlowBlock {
+use super::{Block, BlockType, CircuitType};
+
+pub(crate) struct DataFlowBlock {
     bid: u64,
     module_name: String,
     scope: String,
@@ -28,7 +29,7 @@ impl Block for DataFlowBlock {
 }
 
 impl DataFlowBlock {
-    pub fn new(bid: u64, module_name: &str, scope: &str, block_type: BlockType) -> Self {
+    pub(super) fn new(bid: u64, module_name: &str, scope: &str, block_type: BlockType) -> Self {
         Self {
             bid,
             module_name: module_name.to_string(),
@@ -37,6 +38,7 @@ impl DataFlowBlock {
             lines: Vec::new(),
         }
     }
+
     fn add_line(&mut self, line: u32) {
         if !self.lines.contains(&line) {
             self.lines.push(line);
@@ -44,7 +46,7 @@ impl DataFlowBlock {
     }
 }
 
-pub fn parse_module_blocks(
+pub(crate) fn parse_module_blocks(
     tree: &SyntaxTree,
     scope: &str,
     code_content: &str,

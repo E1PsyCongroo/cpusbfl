@@ -1,8 +1,8 @@
-pub mod dfb;
-pub mod mgr;
+mod dfb;
+mod mgr;
 
-pub use dfb::DataFlowBlock;
-pub use mgr::BlockManager;
+pub(crate) use dfb::{DataFlowBlock, parse_module_blocks};
+pub(crate) use mgr::BlockManager;
 
 /// Block type classification
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

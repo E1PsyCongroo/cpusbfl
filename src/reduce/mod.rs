@@ -1,3 +1,4 @@
+mod cover;
 mod nop;
 mod strip_prefix;
 mod strip_suffix;
@@ -5,21 +6,25 @@ mod trim;
 
 use libafl::prelude::*;
 
+use crate::coverage::*;
 use crate::elf::*;
-use crate::harness::{sim_run_with_trackers, sim_with_max_inst};
+use crate::harness::*;
 use crate::inst::*;
 use crate::state_tracker::*;
 use crate::utils::*;
 use nop::nop_unexecuted_insts;
 use strip_prefix::strip_irrelevant_prefix;
 use strip_suffix::strip_irrelevant_suffix;
-use trim::trim_after_max_pc;
+// use trim::trim_after_max_pc;
 
-fn run_and_collect(input: &BytesInput, max_inst: usize) -> (ExitKind, StateTrackers) {
+pub(crate) use cover::{reduce_init_case_coverage, reduce_pass_case_coverage};
+
+fn run_and_collect(input: &BytesInput, max_inst: usize) -> (ExitKind, Coverages, StateTrackers) {
     sim_with_max_inst(max_inst, || {
-        let exit_kind = sim_run_with_trackers(input);
+        let exit_kind = fuzz_harness(input);
+        let covers = coverages().clone();
         let state_trackers = trackers().clone();
-        (exit_kind, state_trackers)
+        (exit_kind, covers, state_trackers)
     })
 }
 
@@ -47,7 +52,7 @@ fn validate_exact_trace(
     original: &StateTrackers,
     max_inst: usize,
 ) -> Option<(BytesInput, StateTrackers)> {
-    let (exit_kind, candidate) = run_and_collect(&input, max_inst);
+    let (exit_kind, _, candidate) = run_and_collect(&input, max_inst);
     is_same_failure_site(exit_kind, &candidate, original).then(|| (input, candidate))
 }
 
