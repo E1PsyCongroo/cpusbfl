@@ -313,33 +313,46 @@ fn try_strip_prefix_at(
     let entry_pc = original.pc_tracker.as_slice().first()?.value;
     let restore_plan = collect_context_restore_plan(original, input, elf_parser, candidate_idx)?;
 
-    let mut context_pc = elf_parser
-        .find_insert_vaddr(candidate_pc.abs_diff(entry_pc), CODE_SEGMENT_ALIGN)
+    let mut bytes = input.to_vec();
+    nop_skipped_prefix_insts(&mut bytes, input, elf_parser, original, candidate_idx);
+
+    let working_elf = ELFParser::from_bytes(&bytes)
+        .ok()?
+        .prepare_for_code_segment_insert()
+        .inspect_err(|err| log::warn!("Failed to prepare ELF for code segment insertion: {err}"))
+        .ok()?;
+
+    let initial_size = working_elf
+        .code_segment_mapped_size(candidate_pc.abs_diff(entry_pc))
+        .ok()?;
+    let mut context_pc = working_elf
+        .find_insert_vaddr(initial_size, CODE_SEGMENT_ALIGN)
         .ok()?;
     let mut context_code = Vec::new();
-    let mut context_inst_count =
-        append_context_restore(&mut context_code, context_pc, &restore_plan, candidate_pc)?;
-    let mut converged = false;
+    let mut context_inst_count = None;
     for _ in 0..4 {
-        let next_context_pc = elf_parser
-            .find_insert_vaddr(u64::try_from(context_code.len()).ok()?, CODE_SEGMENT_ALIGN)
+        context_code.clear();
+        let inst_count =
+            append_context_restore(&mut context_code, context_pc, &restore_plan, candidate_pc)?;
+        let mapped_size = working_elf
+            .code_segment_mapped_size(u64::try_from(context_code.len()).ok()?)
+            .ok()?;
+        let next_context_pc = working_elf
+            .find_insert_vaddr(mapped_size, CODE_SEGMENT_ALIGN)
             .ok()?;
         if next_context_pc == context_pc {
-            converged = true;
+            context_inst_count = Some(inst_count);
             break;
         }
-        context_code.clear();
-        context_inst_count =
-            append_context_restore(&mut context_code, context_pc, &restore_plan, candidate_pc)?;
         context_pc = next_context_pc;
     }
-    if !converged {
+    let Some(context_inst_count) = context_inst_count else {
         log::debug!(
             "Failed to converge context restore code placement, candidate_pc={:#x}",
             candidate_pc
         );
         return None;
-    }
+    };
 
     let entry_jmp = encode_jmp(
         entry_pc,
@@ -347,16 +360,9 @@ fn try_strip_prefix_at(
         true,
         Some(u64::from(restore_plan.scratches[0].0)),
     )?;
-    let entry_offset = usize::try_from(elf_parser.vma2offset(entry_pc).unwrap()).unwrap();
-    let entry_end = entry_offset.checked_add(entry_jmp.len()).unwrap();
-
-    let mut bytes = input.to_vec();
-    bytes
-        .get_mut(entry_offset..entry_end)?
-        .copy_from_slice(&entry_jmp);
-    nop_skipped_prefix_insts(&mut bytes, input, elf_parser, original, candidate_idx);
-
-    let bytes = ELFParser::from_bytes(&bytes)
+    let bytes = working_elf
+        .patch_vaddr(entry_pc, &entry_jmp)
+        .inspect_err(|err| log::warn!("Failed to patch prefix entry jump: {err}"))
         .ok()?
         .insert_code_segment(&context_code, context_pc, CODE_SEGMENT_ALIGN)
         .inspect_err(|err| log::warn!("Failed to insert prefix restore code: {err}"))

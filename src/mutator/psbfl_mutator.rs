@@ -2,16 +2,16 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 
 use clap::ValueEnum;
-use libafl::{HasMetadata, prelude::*};
+use libafl::prelude::*;
 use libafl_bolts::{Named, rands::Rand};
-use serde::{Deserialize, Serialize};
 
 use crate::elf::*;
 use crate::inst::*;
+use crate::mutator::MutationMetadata;
 use crate::state_tracker::*;
 
 #[derive(Debug, Clone, ValueEnum)]
-pub(crate) enum MutationStrategy {
+pub(crate) enum PSBFLMutationStrategy {
     #[value(name = "uniform")]
     Uniform,
     #[value(name = "tail_linear")]
@@ -24,40 +24,33 @@ pub(crate) enum MutationStrategy {
     HeadQuadratic,
 }
 
-impl Default for MutationStrategy {
+impl Default for PSBFLMutationStrategy {
     fn default() -> Self {
         Self::Uniform
     }
 }
 
 #[derive(Debug, Clone)]
-struct LastWindowCandidate {
+struct PSBFLCandidate {
     pc: u64,
     offset: usize,
     len: usize,
     weight: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct LastWindowMutationMetadata {
-    pub(crate) mutated_pcs: HashSet<u64>,
-}
-
-libafl_bolts::impl_serdeany!(LastWindowMutationMetadata);
-
 #[derive(Debug)]
-pub(crate) struct LastWindowMutator {
-    candidates: Vec<LastWindowCandidate>,
+pub(crate) struct PSBFLMutator {
+    candidates: Vec<PSBFLCandidate>,
     total_weight: u64,
     iters: u64,
     mutated_pcs: HashSet<u64>,
 }
 
-impl LastWindowMutator {
+impl PSBFLMutator {
     pub(crate) fn new<I>(
         init_bytes: &I,
         pc_trace: &StateTracker<PCState>,
-        strategy: MutationStrategy,
+        strategy: PSBFLMutationStrategy,
         window_size: u64,
     ) -> Result<Self, Box<dyn std::error::Error>>
     where
@@ -84,22 +77,21 @@ impl LastWindowMutator {
 
         let mut candidates = Vec::new();
         let mut total_weight = 0u64;
-
         for (idx, &pc) in window.iter().enumerate() {
             let offset = usize::try_from(elf_parser.vma2offset(pc)?)?;
 
             let inst_len = inst_len_at(init_bytes, offset);
 
             let weight = match strategy {
-                MutationStrategy::Uniform => 1u64,
-                MutationStrategy::TailLinear => u64::try_from(idx + 1)?,
-                MutationStrategy::TailQuadratic => u64::try_from(
+                PSBFLMutationStrategy::Uniform => 1u64,
+                PSBFLMutationStrategy::TailLinear => u64::try_from(idx + 1)?,
+                PSBFLMutationStrategy::TailQuadratic => u64::try_from(
                     (idx + 1)
                         .checked_pow(2)
                         .ok_or("LastWindowMutator weight overflow")?,
                 )?,
-                MutationStrategy::HeadLinear => u64::try_from(window.len() - idx)?,
-                MutationStrategy::HeadQuadratic => u64::try_from(
+                PSBFLMutationStrategy::HeadLinear => u64::try_from(window.len() - idx)?,
+                PSBFLMutationStrategy::HeadQuadratic => u64::try_from(
                     (window.len() - idx)
                         .checked_pow(2)
                         .ok_or("LastWindowMutator weight overflow")?,
@@ -110,7 +102,7 @@ impl LastWindowMutator {
                 .checked_add(weight)
                 .ok_or("LastWindowMutator total_weight overflow")?;
 
-            candidates.push(LastWindowCandidate {
+            candidates.push(PSBFLCandidate {
                 pc,
                 offset,
                 len: inst_len,
@@ -125,7 +117,7 @@ impl LastWindowMutator {
             .into());
         }
 
-        let iters = std::cmp::max(1, (candidates.len() as f64).sqrt().floor() as u64);
+        let iters = ((candidates.len() as f64).sqrt().floor() as u64).max(1);
         Ok(Self {
             candidates,
             total_weight,
@@ -186,7 +178,7 @@ impl LastWindowMutator {
     }
 }
 
-impl<I, S> Mutator<I, S> for LastWindowMutator
+impl<I, S> Mutator<I, S> for PSBFLMutator
 where
     S: HasRand + HasTestcase<I>,
     I: HasMutatorBytes,
@@ -213,23 +205,22 @@ where
             let mut mutated_pcs = match testcase.parent_id() {
                 Some(parent_id) => state
                     .testcase(parent_id)?
-                    .metadata::<LastWindowMutationMetadata>()
+                    .metadata::<MutationMetadata>()
                     .map(|m| m.mutated_pcs.clone())
                     .unwrap_or(HashSet::new()),
                 None => HashSet::new(),
             };
             mutated_pcs.extend(self.mutated_pcs.iter());
-            testcase.add_metadata(LastWindowMutationMetadata { mutated_pcs });
+            testcase.add_metadata(MutationMetadata { mutated_pcs });
         }
 
-        self.mutated_pcs.clear();
         Ok(())
     }
 }
 
-impl Named for LastWindowMutator {
+impl Named for PSBFLMutator {
     fn name(&self) -> &Cow<'static, str> {
-        static NAME: Cow<'static, str> = Cow::Borrowed("LastWindowMutator");
+        static NAME: Cow<'static, str> = Cow::Borrowed("PSBFLMutator");
         &NAME
     }
 }

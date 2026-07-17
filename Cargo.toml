@@ -20,7 +20,7 @@ serde_json = { version = "1.0.149", default-features = false }
 dtw_rs = "0.10.0"
 ndarray = "0.17.2"
 tempfile = "3"
-lief = { git = "https://github.com/lief-project/LIEF", branch = "main" }
+lief = "1.0.0"
 ouroboros = "0.18.5"
 sv-parser = "0.13.5"
 log = "0.4.33"

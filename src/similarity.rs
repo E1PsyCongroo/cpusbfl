@@ -1,6 +1,7 @@
+use libafl::prelude::*;
 use dtw_rs::{Distance, Midpoint, Solution, fastdtw};
-use ndarray::ArrayView1;
 
+use crate::feedback::*;
 use crate::coverage::*;
 use crate::state_tracker::*;
 
@@ -67,6 +68,59 @@ pub(crate) fn fastdtw_distance(a: &[CoreStateRef], b: &[CoreStateRef], radius: u
     solution.distance() / path_len
 }
 
+pub(crate) fn coverage_distance(a: &Coverages, b: &Coverages) -> f64 {
+    let cover_names = a.names();
+    if cover_names.is_empty() {
+        return 0.0;
+    }
+
+    cover_names
+        .into_iter()
+        .map(|cover_name| {
+            let cover_len = a.len(&cover_name);
+            if cover_len == 0 {
+                return 0.0;
+            }
+
+            let a_counts = a.covered_counts(&cover_name);
+            let b_counts = b.covered_counts(&cover_name);
+            log_euclidean_distance(&a_counts, &b_counts) / (cover_len as f64).sqrt()
+        })
+        .sum::<f64>()
+        / a.names().len() as f64
+}
+
+pub(crate) fn state_trackers_distance(a: &StateTrackers, b: &StateTrackers) -> f64 {
+    let a_core_state = a
+        .arch_int_reg_tracker
+        .iter()
+        .zip(a.csr_tracker.iter())
+        .map(|(arch, csr)| CoreStateRef {
+            arch_int_reg_state: arch,
+            csr_state: csr,
+        })
+        .collect::<Vec<_>>();
+    let b_core_state = b
+        .arch_int_reg_tracker
+        .iter()
+        .zip(b.csr_tracker.iter())
+        .map(|(arch, csr)| CoreStateRef {
+            arch_int_reg_state: arch,
+            csr_state: csr,
+        })
+        .collect::<Vec<_>>();
+
+    fastdtw_distance(&a_core_state, &b_core_state, 10)
+}
+
+pub(crate) fn combine_raw_distance(
+    cover_distance: f64,
+    state_distance: f64,
+    cover_weight: f64,
+) -> f64 {
+    cover_weight * cover_distance + (1.0 - cover_weight) * state_distance
+}
+
 pub(crate) fn quantile_transform(values: &[f64]) -> Vec<f64> {
     let len = values.len();
 
@@ -110,9 +164,6 @@ pub(crate) fn distance_similarity(distance: f64) -> f64 {
 pub(crate) fn jaccard_similarity(a: &[u8], b: &[u8]) -> f64 {
     assert_eq!(a.len(), b.len());
 
-    let a = ArrayView1::from(a);
-    let b = ArrayView1::from(b);
-
     let (intersection, union) =
         a.iter()
             .zip(b.iter())
@@ -127,4 +178,73 @@ pub(crate) fn jaccard_similarity(a: &[u8], b: &[u8]) -> f64 {
     } else {
         intersection as f64 / union as f64
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RankedCorpusCase {
+    pub(crate) id: CorpusId,
+    pub(crate) distance: f64,
+    pub(crate) fitness: f64,
+}
+
+pub(crate) fn ranked_passed_cases<I, S>(
+    state: &S,
+    initial_id: CorpusId,
+    cover_weight: f64,
+) -> Result<Vec<RankedCorpusCase>, Error>
+where
+    S: HasCorpus<I>,
+{
+    let initial = state.corpus().get(initial_id)?.borrow();
+    let initial_covers = &initial.metadata::<CoveragesMetadata>()?.covers;
+    let initial_trackers = &initial.metadata::<StateTrackersMetadata>()?.trackers;
+
+    let mut cases = Vec::new();
+    for id in state.corpus().ids() {
+        if id == initial_id {
+            continue;
+        }
+
+        let testcase = state.corpus().get(id)?.borrow();
+        if !testcase.metadata::<PassedMetadata>()?.is_passed {
+            continue;
+        }
+
+        let covers = &testcase.metadata::<CoveragesMetadata>()?.covers;
+        let trackers = &testcase.metadata::<StateTrackersMetadata>()?.trackers;
+        let cover_distance = coverage_distance(initial_covers, covers);
+        let state_distance = state_trackers_distance(initial_trackers, trackers);
+        cases.push((id, cover_distance, state_distance));
+    }
+    drop(initial);
+
+    let cover_distances = quantile_transform(
+        &cases
+            .iter()
+            .map(|(_, cover_distance, _)| *cover_distance)
+            .collect::<Vec<_>>(),
+    );
+    let state_distances = quantile_transform(
+        &cases
+            .iter()
+            .map(|(_, _, state_distance)| *state_distance)
+            .collect::<Vec<_>>(),
+    );
+
+    Ok(cases
+        .into_iter()
+        .zip(cover_distances)
+        .zip(state_distances)
+        .map(
+            |(((id, _, _), cover_distance), state_distance)| RankedCorpusCase {
+                id,
+                distance: combine_raw_distance(cover_distance, state_distance, cover_weight),
+                fitness: distance_similarity(combine_raw_distance(
+                    cover_distance,
+                    state_distance,
+                    cover_weight,
+                )),
+            },
+        )
+        .collect())
 }

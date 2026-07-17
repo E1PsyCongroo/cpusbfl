@@ -1,10 +1,9 @@
-use std::borrow::Cow;
 use std::collections::HashSet;
 use std::{any::type_name, io::Write};
 
 use clap::ValueEnum;
-use libafl::{StdFuzzer, prelude::*, schedulers::QueueScheduler, state::StdState};
-use libafl_bolts::{Named, current_nanos, rands::StdRand, tuples::tuple_list};
+use libafl::{StdFuzzer, prelude::*, state::StdState};
+use libafl_bolts::{current_nanos, rands::StdRand, tuples::tuple_list};
 use rand::seq::SliceRandom;
 
 use crate::coverage::*;
@@ -16,41 +15,6 @@ use crate::reduce::*;
 use crate::similarity::*;
 use crate::state_tracker::*;
 use crate::utils::*;
-
-enum SelectedMutator<I, S> {
-    First(Box<dyn Mutator<I, S>>),
-    Second(Box<dyn Mutator<I, S>>),
-}
-impl<I, S> Named for SelectedMutator<I, S> {
-    fn name(&self) -> &Cow<'static, str> {
-        match self {
-            SelectedMutator::First(m) => m.name(),
-            SelectedMutator::Second(m) => m.name(),
-        }
-    }
-}
-
-impl<I, S> Mutator<I, S> for SelectedMutator<I, S>
-where
-    I: HasMutatorBytes,
-    S: HasRand,
-{
-    #[inline]
-    fn mutate(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error> {
-        match self {
-            SelectedMutator::First(m) => m.mutate(state, input),
-            SelectedMutator::Second(m) => m.mutate(state, input),
-        }
-    }
-
-    #[inline]
-    fn post_exec(&mut self, state: &mut S, new_corpus_id: Option<CorpusId>) -> Result<(), Error> {
-        match self {
-            SelectedMutator::First(m) => m.post_exec(state, new_corpus_id),
-            SelectedMutator::Second(m) => m.post_exec(state, new_corpus_id),
-        }
-    }
-}
 
 pub(crate) struct CaseMetadata {
     pub covers: Coverages,
@@ -73,44 +37,25 @@ impl Default for Selection {
 }
 
 fn emit_top_passed_testcases(
-    mut state: StdState<
-        InMemoryCorpus<ValueInput<Vec<u8>>>,
-        ValueInput<Vec<u8>>,
-        StdRand,
-        InMemoryCorpus<ValueInput<Vec<u8>>>,
-    >,
-    mut init_metadata: CaseMetadata,
+    init_input: &BytesInput,
+    output: &Option<String>,
+
     cover_weight: f64,
-    top_n: u64,
+    top_pass: u64,
     selection: Selection,
     reduce_cover: bool,
     save_trace: bool,
-    init_input: &BytesInput,
-    output: &Option<String>,
+
+    mut state: StdState<
+        InMemoryCorpus<BytesInput>,
+        BytesInput,
+        StdRand,
+        InMemoryCorpus<BytesInput>,
+    >,
+    mut init_metadata: CaseMetadata,
 ) -> Result<Vec<CaseMetadata>, Box<dyn std::error::Error>> {
     let corpus = state.corpus_mut();
     let mut passed_cases = Vec::new();
-    let init_metadata_coverd_counts = init_metadata
-        .covers
-        .names()
-        .into_iter()
-        .map(|cover_name| {
-            let cover_len = init_metadata.covers.len(&cover_name);
-            let cover_counts = init_metadata.covers.covered_counts(&cover_name);
-            (cover_name, cover_len, cover_counts)
-        })
-        .collect::<Vec<_>>();
-    let init_metadata_core_state = init_metadata
-        .state_trackers
-        .arch_int_reg_tracker
-        .iter()
-        .zip(init_metadata.state_trackers.csr_tracker.iter())
-        .map(|(arch, csr)| CoreStateRef {
-            arch_int_reg_state: arch,
-            csr_state: csr,
-        })
-        .collect::<Vec<_>>();
-
     for id in corpus.ids().collect::<Vec<_>>() {
         let mut testcase = corpus.remove(id)?;
 
@@ -133,7 +78,7 @@ fn emit_top_passed_testcases(
             .trackers;
 
         let mutated_pcs = testcase
-            .remove_metadata::<LastWindowMutationMetadata>()
+            .remove_metadata::<MutationMetadata>()
             .map(|m| m.mutated_pcs);
 
         let metadata = CaseMetadata {
@@ -143,31 +88,9 @@ fn emit_top_passed_testcases(
             mutated_pcs: mutated_pcs,
         };
 
-        let cover_distance = init_metadata_coverd_counts
-            .iter()
-            .map(|(cov_name, cov_len, init_counts)| {
-                let metadata_counts = metadata.covers.covered_counts(cov_name);
-                let dis = log_euclidean_distance(&init_counts, &metadata_counts)
-                    / (*cov_len as f64).sqrt();
-                dis
-            })
-            .sum::<f64>()
-            / init_metadata_coverd_counts.len() as f64;
-
-        let state_distance = fastdtw_distance(
-            &init_metadata_core_state,
-            &metadata
-                .state_trackers
-                .arch_int_reg_tracker
-                .iter()
-                .zip(metadata.state_trackers.csr_tracker.iter())
-                .map(|(arch, csr)| CoreStateRef {
-                    arch_int_reg_state: arch,
-                    csr_state: csr,
-                })
-                .collect::<Vec<_>>(),
-            10,
-        );
+        let cover_distance = coverage_distance(&init_metadata.covers, &metadata.covers);
+        let state_distance =
+            state_trackers_distance(&init_metadata.state_trackers, &metadata.state_trackers);
 
         log::debug!(
             "Corpus testcase {id}: cover_distance {}, state_distance {}",
@@ -230,7 +153,7 @@ fn emit_top_passed_testcases(
         }
     }
 
-    let limit = usize::min(top_n as usize, passed_cases.len());
+    let limit = usize::min(top_pass as usize, passed_cases.len());
     log::info!(
         "Found {} passed testcases with unique coverage, selecting {} cases by {:?}.",
         passed_cases.len(),
@@ -275,30 +198,40 @@ fn emit_top_passed_testcases(
     Ok(case_coverages)
 }
 
-pub(crate) fn run_fuzzer(
-    base_mutator: bool,
+pub(crate) fn run_fuzzer<SC, M, MF>(
+    init_case: &BytesInput,
+    output: &Option<String>,
     max_iters: u64,
     max_run_timeout: u64,
     tracker_window_size: u64,
-    mutator_strategy: MutationStrategy,
-    mutator_window_size: u64,
+
     cover_weight: f64,
-    top_n: u64,
+    top_pass: u64,
     selection: Selection,
     reduce_cover: bool,
     save_trace: bool,
-    init_case: &BytesInput,
-    output: &Option<String>,
-) -> Result<Vec<CaseMetadata>, Box<dyn std::error::Error>> {
-    // Scheduler, Feedback, Objective
-    let scheduler = QueueScheduler::new();
 
+    scheduler: SC,
+    mutator_factory: MF,
+) -> Result<Vec<CaseMetadata>, Box<dyn std::error::Error>>
+where
+    SC: Scheduler<
+            BytesInput,
+            StdState<InMemoryCorpus<BytesInput>, BytesInput, StdRand, InMemoryCorpus<BytesInput>>,
+        >,
+    M: Mutator<
+            BytesInput,
+            StdState<InMemoryCorpus<BytesInput>, BytesInput, StdRand, InMemoryCorpus<BytesInput>>,
+        >,
+    MF: FnOnce(&CaseMetadata) -> Result<M, Box<dyn std::error::Error>>,
+{
+    // Scheduler, Feedback, Objective
     let coverages_observer = unsafe { CoveragesObserver::from_raw("coverages", &coverages()) };
     let statetrackers_observer = unsafe {
         StateTrackersObserver::from_raw("state_trackers", &trackers(), tracker_window_size)
     };
 
-    let mut feedback = feedback_and!(
+    let mut feedback = feedback_and_fast!(
         PassedFeedback::new(),
         feedback_or!(
             CoveragesFeedback::new(&coverages_observer),
@@ -377,20 +310,11 @@ pub(crate) fn run_fuzzer(
         .expect("SIM_ARGS poisoned mutex")
         .extend(vec!["-I".to_string(), max_inst.to_string()].into_iter());
 
+    // Build mutators after evaluating the initial input, since the guided
+    // mutators need its PC trace.
+    let mutator = mutator_factory(&init_metadata)?;
+
     // Fuzzing Loop
-    let mutator = if base_mutator {
-        SelectedMutator::First(Box::new(ELFHavocScheduledMutator::new(
-            havoc_mutations(),
-            init_case,
-        )?))
-    } else {
-        SelectedMutator::Second(Box::new(LastWindowMutator::new(
-            init_case,
-            &init_metadata.state_trackers.pc_tracker,
-            mutator_strategy,
-            mutator_window_size,
-        )?))
-    };
     let mut stages = tuple_list!(StdMutationalStage::new(mutator));
 
     let fuzzing_start_time = process_cpu_time_now()?;
@@ -427,14 +351,14 @@ pub(crate) fn run_fuzzer(
     }
 
     emit_top_passed_testcases(
-        state,
-        init_metadata,
+        init_case,
+        output,
         cover_weight,
-        top_n,
+        top_pass,
         selection,
         reduce_cover,
         save_trace,
-        init_case,
-        output,
+        state,
+        init_metadata,
     )
 }

@@ -1,4 +1,4 @@
-use lief::generic::Section;
+use lief::generic::{Binary as _, Section};
 use ouroboros::self_referencing;
 use tempfile::NamedTempFile;
 
@@ -130,6 +130,66 @@ impl ELFParser {
         self.borrow_elf()
             .virtual_address_to_offset(vma)
             .map_err(|e| e.to_string().into())
+    }
+
+    pub fn prepare_for_code_segment_insert(self) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut elf = self.into_heads().elf;
+
+        if elf.header().file_type() != lief::elf::header::FileType::EXEC {
+            return Err("code segment insertion currently only supports ET_EXEC ELF files".into());
+        }
+
+        let phdr_offset = elf.relocate_phdr_table(lief::elf::binary::PhdrReloc::AUTO);
+        if phdr_offset == 0 {
+            return Err("failed to relocate the ELF program header table".into());
+        }
+
+        Ok(Self::from(elf))
+    }
+
+    pub fn code_segment_mapped_size(
+        &self,
+        code_size: u64,
+    ) -> Result<u64, Box<dyn std::error::Error>> {
+        if code_size == 0 {
+            return Err("code segment must not be empty".into());
+        }
+
+        let page_size = self.borrow_elf().page_size();
+        if page_size == 0 {
+            return Err("LIEF reported a zero ELF page size".into());
+        }
+
+        align_up(code_size, page_size)
+    }
+
+    pub fn patch_vaddr(self, vaddr: u64, patch: &[u8]) -> Result<Self, Box<dyn std::error::Error>> {
+        if patch.is_empty() {
+            return Ok(self);
+        }
+
+        let patch_size = u64::try_from(patch.len())?;
+        let patch_end = vaddr.checked_add(patch_size).ok_or_else(|| {
+            format!("patch range overflow: start={vaddr:#x}, size={patch_size:#x}")
+        })?;
+
+        let range_is_file_backed = self.borrow_load_segments().iter().any(|segment| {
+            let segment_start = segment.virtual_address();
+            let Some(segment_end) = segment_start.checked_add(segment.physical_size()) else {
+                return false;
+            };
+            segment_start <= vaddr && patch_end <= segment_end
+        });
+        if !range_is_file_backed {
+            return Err(format!(
+                "patch range {vaddr:#x}..{patch_end:#x} is not contained in a file-backed LOAD segment"
+            )
+            .into());
+        }
+
+        let mut elf = self.into_heads().elf;
+        elf.patch_address(vaddr, patch);
+        Ok(Self::from(elf))
     }
 
     pub fn find_insert_vaddr(
@@ -272,34 +332,56 @@ impl ELFParser {
             return Err(format!("vaddr {vaddr:#x} is not aligned to {align:#x}").into());
         }
 
+        let parser = self.prepare_for_code_segment_insert()?;
         let size = u64::try_from(code.len())?;
+        let mapped_size = parser.code_segment_mapped_size(size)?;
 
-        if self.vaddr_range_overlaps_load_segment(vaddr, size)? {
+        if parser.vaddr_range_overlaps_load_segment(vaddr, mapped_size)? {
+            let end = vaddr.checked_add(mapped_size).ok_or_else(|| {
+                format!("inserted code range overflow: start={vaddr:#x}, size={mapped_size:#x}")
+            })?;
             return Err(format!(
                 "inserted code range {:#x}..{:#x} overlaps existing LOAD segment",
-                vaddr,
-                vaddr + size,
+                vaddr, end,
             )
             .into());
         }
 
-        let mut elf = self.into_heads().elf;
+        let mut elf = parser.into_heads().elf;
 
         let mut new_segment = lief::elf::Segment::new();
         new_segment.set_type(lief::elf::segment::Type::LOAD);
-        new_segment.set_flags(
-            lief::elf::segment::Flags::W
-                | lief::elf::segment::Flags::R
-                | lief::elf::segment::Flags::X,
-        );
+        new_segment.set_flags(lief::elf::segment::Flags::R | lief::elf::segment::Flags::X);
         new_segment.set_virtual_address(vaddr);
         new_segment.set_physical_address(vaddr);
-        new_segment.set_virtual_size(size);
+        new_segment.set_virtual_size(mapped_size);
         new_segment.set_alignment(align);
         new_segment.set_content(code);
 
-        elf.add_segment(&new_segment)
-            .ok_or("failed to add new LOAD segment")?;
+        let (actual_vaddr, actual_physical_size, actual_virtual_size) = {
+            let added = elf
+                .add_segment(&new_segment)
+                .ok_or("failed to add new LOAD segment")?;
+            (
+                added.virtual_address(),
+                added.physical_size(),
+                added.virtual_size(),
+            )
+        };
+
+        if actual_vaddr != vaddr {
+            return Err(format!(
+                "LIEF changed inserted segment VMA from {vaddr:#x} to {actual_vaddr:#x}"
+            )
+            .into());
+        }
+        if actual_physical_size > mapped_size || actual_virtual_size > mapped_size {
+            return Err(format!(
+                "LIEF expanded inserted segment beyond reserved range: reserved={mapped_size:#x}, \
+                 file_size={actual_physical_size:#x}, mem_size={actual_virtual_size:#x}"
+            )
+            .into());
+        }
 
         Ok(ELFParser::from(elf))
     }
