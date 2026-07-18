@@ -214,8 +214,8 @@ pub(crate) fn append_load_u64(output: &mut Vec<u8>, rd: u8, value: u64) -> u64 {
             push_inst(output, encode_lui(rd, hi20));
             append_inst_count += 1;
             if lo12 != 0 {
-                push_inst(output, encode_addi(rd, rd, lo12));
-                // push_inst(output, encode_addiw(rd, rd, lo12));
+                // push_inst(output, encode_addi(rd, rd, lo12));
+                push_inst(output, encode_addiw(rd, rd, lo12));
                 append_inst_count += 1;
             }
         } else {
@@ -391,22 +391,22 @@ pub(crate) fn append_memory_restore(
     while idx < memory_bytes.len() {
         let addr = memory_bytes[idx].addr;
         let remaining = &memory_bytes[idx..];
-        // let width = if addr % 8 == 0 && contiguous_bytes(remaining, addr, 8) {
-        //     MemoryWidth::Double
-        // } else if addr % 4 == 0 && contiguous_bytes(remaining, addr, 4) {
-        //     MemoryWidth::Word
-        // } else if addr % 2 == 0 && contiguous_bytes(remaining, addr, 2) {
-        //     MemoryWidth::Half
-        // } else {
-        //     MemoryWidth::Byte
-        // };
-        let width = if addr % 4 == 0 && contiguous_bytes(remaining, addr, 4) {
+        let width = if addr % 8 == 0 && contiguous_bytes(remaining, addr, 8) {
+            MemoryWidth::Double
+        } else if addr % 4 == 0 && contiguous_bytes(remaining, addr, 4) {
             MemoryWidth::Word
         } else if addr % 2 == 0 && contiguous_bytes(remaining, addr, 2) {
             MemoryWidth::Half
         } else {
             MemoryWidth::Byte
         };
+        // let width = if addr % 4 == 0 && contiguous_bytes(remaining, addr, 4) {
+        //     MemoryWidth::Word
+        // } else if addr % 2 == 0 && contiguous_bytes(remaining, addr, 2) {
+        //     MemoryWidth::Half
+        // } else {
+        //     MemoryWidth::Byte
+        // };
         let width_bytes = width.bytes() as usize;
         let value = remaining[..width_bytes]
             .iter()

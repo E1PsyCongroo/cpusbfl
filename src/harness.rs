@@ -39,7 +39,7 @@ pub(crate) static SIM_ARGS: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
 
 fn sim_run(workload: &str, update_cover: bool, update_tracker: bool) -> i32 {
     // prepare the simulation arguments in Vec<String> format
-    let mut sim_args: Vec<String> = vec!["emu".to_string(), "-E".to_string(), workload.to_string()]
+    let mut sim_args: Vec<String> = vec!["emu".to_string(), "-i".to_string(), workload.to_string()]
         .iter()
         .map(|s| s.to_string())
         .collect();
