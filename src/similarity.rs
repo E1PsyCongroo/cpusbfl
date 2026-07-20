@@ -1,8 +1,8 @@
-use libafl::prelude::*;
 use dtw_rs::{Distance, Midpoint, Solution, fastdtw};
+use libafl::prelude::*;
 
-use crate::feedback::*;
 use crate::coverage::*;
+use crate::feedback::*;
 use crate::state_tracker::*;
 
 pub(crate) fn log_euclidean_distance<T>(a: &[T], b: &[T]) -> f64
@@ -110,7 +110,7 @@ pub(crate) fn state_trackers_distance(a: &StateTrackers, b: &StateTrackers) -> f
         })
         .collect::<Vec<_>>();
 
-    fastdtw_distance(&a_core_state, &b_core_state, 10)
+    fastdtw_distance(&a_core_state, &b_core_state, 1)
 }
 
 pub(crate) fn combine_raw_distance(
@@ -146,8 +146,12 @@ pub(crate) fn quantile_transform(values: &[f64]) -> Vec<f64> {
 
         let q = avg_rank / ((len - 1) as f64);
 
-        for &(idx, _) in &indexed[i..j] {
-            result[idx] = q;
+        for &(idx, raw) in &indexed[i..j] {
+            if raw == 0.0 {
+                result[idx] = 0.0;
+            } else {
+                result[idx] = q;
+            }
         }
 
         i = j;

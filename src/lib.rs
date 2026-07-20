@@ -29,6 +29,15 @@ fn parse_weight(s: &str) -> Result<f64, String> {
     }
 }
 
+fn parse_positive_usize(s: &str) -> Result<usize, String> {
+    let value = s.parse::<usize>().map_err(|e| e.to_string())?;
+    if value > 0 {
+        Ok(value)
+    } else {
+        Err(format!("{value} is not a positive integer"))
+    }
+}
+
 #[derive(Args, Debug)]
 struct RTLArgs {
     #[arg(long, requires_all = ["top_module", "top_scope"])]
@@ -72,6 +81,10 @@ struct SBFLArgs {
     top_pass: u64,
     #[arg(default_value_t = fuzzer::Selection::Sort, long, value_enum)]
     selection: fuzzer::Selection,
+    #[arg(default_value_t = 0.4f64, value_parser = parse_weight, long)]
+    selection_diversity_weight: f64,
+    #[arg(default_value_t = 3usize, value_parser = parse_positive_usize, long)]
+    selection_pool_factor: usize,
     #[arg(default_value_t = 10, long)]
     top_sus: u64,
     #[command(flatten)]
@@ -170,9 +183,6 @@ fn _main() -> Result<(), Box<dyn std::error::Error>> {
         state,
     } = Cli::parse();
 
-    let mut workloads: Vec<String> = Vec::new();
-    let mut emu_args: Vec<String> = Vec::new();
-
     match command {
         Command::Workload {
             repeat,
@@ -267,6 +277,8 @@ fn _main() -> Result<(), Box<dyn std::error::Error>> {
                         sbfl_args.cover_distance_weight,
                         sbfl_args.top_pass,
                         sbfl_args.selection,
+                        sbfl_args.selection_diversity_weight,
+                        sbfl_args.selection_pool_factor,
                         sbfl_args.reduce_cover,
                         sbfl_args.save_trace,
                         scheduler,
@@ -291,6 +303,8 @@ fn _main() -> Result<(), Box<dyn std::error::Error>> {
                         sbfl_args.cover_distance_weight,
                         sbfl_args.top_pass,
                         sbfl_args.selection,
+                        sbfl_args.selection_diversity_weight,
+                        sbfl_args.selection_pool_factor,
                         sbfl_args.reduce_cover,
                         sbfl_args.save_trace,
                         scheduler,
@@ -323,6 +337,8 @@ fn _main() -> Result<(), Box<dyn std::error::Error>> {
                         sbfl_args.cover_distance_weight,
                         sbfl_args.top_pass,
                         sbfl_args.selection,
+                        sbfl_args.selection_diversity_weight,
+                        sbfl_args.selection_pool_factor,
                         sbfl_args.reduce_cover,
                         sbfl_args.save_trace,
                         scheduler,
