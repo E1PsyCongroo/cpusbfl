@@ -1,16 +1,17 @@
 use libafl::prelude::*;
 use md5;
 use std::io::Write;
+use std::path::Path;
 
 use crate::coverage::*;
 use crate::fuzzer::CaseMetadata;
 
 pub(crate) fn load_initial_case(
-    corpus_input: &str,
+    input: impl AsRef<Path>,
 ) -> Result<BytesInput, Box<dyn std::error::Error>> {
-    let path = std::path::PathBuf::from(corpus_input);
+    let path = input.as_ref();
     let input_path = if path.is_file() {
-        path.clone()
+        path.to_path_buf()
     } else if path.is_dir() {
         let mut entries = std::fs::read_dir(&path)?
             .filter_map(|entry| entry.ok())
@@ -19,9 +20,9 @@ pub(crate) fn load_initial_case(
             .collect::<Vec<_>>();
         entries.sort();
         entries
-            .into_iter()
-            .next()
+            .first()
             .ok_or_else(|| format!("No testcase found in corpus_input directory {path:?}"))?
+            .to_path_buf()
     } else {
         return Err(format!("corpus_input {path:?} is neither a file nor a directory").into());
     };
@@ -34,9 +35,10 @@ pub(crate) fn load_initial_case(
 pub fn store_testcase(
     input: &BytesInput,
     metadata: Option<&CaseMetadata>,
-    output_dir: &str,
+    output_dir: impl AsRef<Path>,
     name: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let output_dir = output_dir.as_ref().join("testcase");
     std::fs::create_dir_all(&output_dir)?;
 
     let filename = match name {
@@ -48,13 +50,13 @@ pub fn store_testcase(
         }
     };
 
-    input.to_file(std::path::PathBuf::from(format!("{output_dir}/{filename}.elf")).as_path())?;
+    input.to_file(output_dir.join(format!("{filename}.elf")))?;
 
     if let Some(metadata) = metadata {
         let mut cover_file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(std::path::PathBuf::from(format!("{output_dir}/{filename}.cover")).as_path())?;
+            .open(output_dir.join(format!("{filename}.cover")))?;
 
         for cover_name in cover_names() {
             writeln!(cover_file, "cover points of {cover_name}:")?;
@@ -77,7 +79,7 @@ pub fn store_testcase(
         let mut state_file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(std::path::PathBuf::from(format!("{output_dir}/{filename}.state")).as_path())?;
+            .open(output_dir.join(format!("{filename}.state")))?;
 
         for idx in 0..metadata.state_trackers.len() {
             writeln!(

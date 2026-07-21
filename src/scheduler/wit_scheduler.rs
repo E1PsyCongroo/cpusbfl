@@ -11,9 +11,13 @@ pub(crate) struct WitScheduler {
 }
 
 impl WitScheduler {
-    pub(crate) fn new(initial_seed_rate: f64, cover_weight: f64) -> Self {
+    pub(crate) fn new(
+        initial_seed_rate: f64,
+        cover_weight: f64,
+        initial_id: Option<CorpusId>,
+    ) -> Self {
         Self {
-            initial_id: None,
+            initial_id,
             initial_seed_rate,
             cover_weight,
         }

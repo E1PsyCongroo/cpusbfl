@@ -115,16 +115,15 @@ fn calculate_metric_score(stats: CoverageStats, metric: SpectrumMetric) -> f64 {
             }
         }
         SpectrumMetric::GP19 => {
-            if ef + nf > 0.0 {
+            if ef > 0.0 {
                 ef * (1.0 + 1.0 / (2.0 * ep + ef))
             } else {
                 0.0
             }
         }
         SpectrumMetric::Barinel => {
-            let h = ef + ep;
-            let p = ef / (ef + nf).max(1.0);
-            if h > 0.0 { 1.0 - p } else { 0.0 }
+            let denom = ef + ep;
+            if denom > 0.0 { ef / denom } else { 0.0 }
         }
         SpectrumMetric::Crosstab => {
             let n = ef + ep + nf + np;

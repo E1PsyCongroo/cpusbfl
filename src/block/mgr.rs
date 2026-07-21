@@ -16,7 +16,7 @@ pub(crate) struct BlockManager {
 impl BlockManager {
     pub(crate) fn new<P: AsRef<Path>>(
         rtl_files: &[P],
-        includes: &[PathBuf],
+        includes: &[P],
         top_module: &str,
         top_scope: &str,
     ) -> Self {
@@ -107,7 +107,7 @@ impl BlockManager {
 
     pub(crate) fn dump_blocks_distribution(
         &self,
-        output_path: &str,
+        output_path: impl AsRef<Path>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let data: Vec<_> = self
             .blocks_by_scope
@@ -124,7 +124,7 @@ impl BlockManager {
                 })
             })
             .collect();
-        save_data_to_json(&data, format!("{}/blocks.json", output_path))?;
+        save_data_to_json(&data, output_path.as_ref().join("blocks.json"))?;
         Ok(())
     }
 }

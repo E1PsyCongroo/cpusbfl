@@ -1,8 +1,9 @@
 use std::borrow::Cow;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use libafl::prelude::*;
 use libafl_bolts::{Named, rands::Rand};
+use serde::{Deserialize, Serialize};
 
 use crate::elf::*;
 use crate::feedback::*;
@@ -12,6 +13,13 @@ use crate::similarity::*;
 use crate::state_tracker::*;
 
 const MIN_PRIORITY: f64 = 1.0e-6;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WitHWPriorityMetadata {
+    priorities: HashMap<u64, f64>,
+}
+
+libafl_bolts::impl_serdeany!(WitHWPriorityMetadata);
 
 #[derive(Debug, Clone)]
 struct WitHWCandidate {
@@ -36,7 +44,7 @@ impl WitHWMutator {
     pub(crate) fn new<I>(
         init_bytes: &I,
         pc_trace: &StateTracker<PCState>,
-        window_size: u64,
+        window_size: usize,
         cover_weight: f64,
         mutate_rate: f64,
         priority_alpha: f64,
@@ -69,7 +77,6 @@ impl WitHWMutator {
             return Err("pc_trace is empty".into());
         }
 
-        let window_size = usize::try_from(window_size)?;
         let start = trace.len().saturating_sub(window_size);
         let mut seen = HashSet::new();
         let window = trace[start..]
@@ -196,6 +203,40 @@ impl WitHWMutator {
             }
         }
     }
+
+    fn priority_snapshot(&self) -> HashMap<u64, f64> {
+        self.candidates
+            .iter()
+            .map(|candidate| (candidate.pc, candidate.priority))
+            .collect()
+    }
+
+    pub(crate) fn restore_priorities<S>(&mut self, state: &mut S)
+    where
+        S: HasMetadata,
+    {
+        if let Ok(metadata) = state.metadata::<WitHWPriorityMetadata>() {
+            for candidate in &mut self.candidates {
+                if let Some(priority) = metadata.priorities.get(&candidate.pc)
+                    && priority.is_finite()
+                    && *priority > 0.0
+                {
+                    candidate.priority = *priority;
+                }
+            }
+        }
+
+        self.persist_priorities(state);
+    }
+
+    fn persist_priorities<S>(&self, state: &mut S)
+    where
+        S: HasMetadata,
+    {
+        state.add_metadata(WitHWPriorityMetadata {
+            priorities: self.priority_snapshot(),
+        });
+    }
 }
 
 impl<I, S> Mutator<I, S> for WitHWMutator
@@ -253,7 +294,9 @@ where
                 };
                 let mut mutated_pcs = parent_mutated_pcs;
                 mutated_pcs.extend(self.mutated_pcs.iter().copied());
-                state.testcase_mut(id)?.add_metadata(MutationMetadata { mutated_pcs });
+                state
+                    .testcase_mut(id)?
+                    .add_metadata(MutationMetadata { mutated_pcs });
             }
 
             let reward = if is_passed {
@@ -263,6 +306,8 @@ where
             };
             self.update_priorities(reward);
         }
+
+        self.persist_priorities(state);
 
         Ok(())
     }

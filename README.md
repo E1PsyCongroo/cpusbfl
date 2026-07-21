@@ -1,144 +1,270 @@
-# xfuzz
+# CPU SBFL for the Ibex Simple System
 
-This project aims at fuzzing general-purpose hardware designs with software fuzzers.
-For now, we are using the [LibAFL](https://github.com/AFLplusplus/LibAFL) as the underlying fuzzing framework.
+[中文](README_CN.md) | English
 
-## Usage
+`cpusbfl` combines differential simulation, software-input fuzzing, and
+spectrum-based fault localization (SBFL) for the Ibex Verilator simple system.
+It starts from an ELF program that reproduces an Ibex/Spike mismatch, mutates
+executable instructions to collect passing counterexamples, and ranks
+instrumented RTL coverage points—and optionally RTL data-flow blocks—by
+suspiciousness.
 
-This is a Rust project. To install Rust, please see [https://www.rust-lang.org/tools/install](https://www.rust-lang.org/tools/install). After the installation of Rust, please run `cargo install cargo-make` to install the cargo-make library.
+The Rust crate is built as `libcpusbfl.so` and linked into
+`Vibex_simple_system`. It is not a standalone `cargo run` application: the
+final executable provides the simulator, Spike co-simulation, coverage, and
+state-tracking callbacks required by the Rust library.
 
-The [Makefile](Makefile) provides some simple commands to build the target `libfuzzer.a`.
+## Highlights
 
-- `make init` to initialize the project
-- `make clean` to clean up the project
-- `make build` to build the dependencies
-- `make rebuild` to clean up and build the project
+- Three generation modes: `psbfl`, `random`, and `wit-hw`.
+- Verilator line, branch, expression, and toggle coverage support.
+- PC, integer-register, and CSR state-sequence tracking.
+- Coverage- and state-guided LibAFL corpus construction.
+- Random, near-failure sort, and diversity-aware passing-case selection.
+- Nine SBFL metrics: Tarantula, Ochiai, Jaccard, DStar, GP19, Barinel,
+  Crosstab, Zoltar, and Ample.
+- Versioned, checksummed corpus checkpoints for resume and offline analysis.
+- Optional ELF reduction, coverage reduction, and RTL block mapping.
 
-## Example
+## Repository Context
 
-We have a real example using the rocket-chip (DUT) and Spike (REF) [here](https://github.com/OpenXiangShan/difftest/blob/master/.github/workflows/nightly.yml#L9).
-This `test-difftest-fuzzing` CI test builds the fuzzer and runs it for 10000 runs (testcases).
+This directory contains the Rust part of the integration. The adjacent
+directory contains the simulator-side implementation:
 
-Run `fuzzer --help` for a full list of runtime arguments.
-
-An example build flow with rocket-chip as the design-under-test is listed as follows:
-
-```bash
-git clone https://github.com/OpenXiangShan/xfuzz.git
-cd xfuzz && make init && make build && cd ..
-
-git clone https://github.com/OpenXiangShan/riscv-arch-test.git
-cd riscv-arch-test/riscv-test-suite
-make build_I -j2
-rm build/*.elf build/*.txt
-cd ../..
-
-git clone https://github.com/OpenXiangShan/riscv-isa-sim.git
-# Replace ROCKET_CHIP with other CPU models (NUTSHELL, XIANGSHAN) if necessary
-# SANCOV=1 lets the C++ compile instrument coverage definitions into the elf
-# If you are not using the LLVM instrumented coverage, remove SANCOV=1 and rebuild it after `make clean`
-make -C riscv-isa-sim/difftest CPU=ROCKET_CHIP SANCOV=1 -j16
-
-# Some shortcuts. They are not required if you understand why we set them
-export SPIKE_HOME=$(pwd)/riscv-isa-sim
-export XFUZZ_HOME=$(pwd)/xfuzz
-export NOOP_HOME=$(pwd)/rocket-chip
-export CORPUS=$(pwd)/riscv-arch-test/riscv-test-suite/build
-
-# Here we build the rocket-chip
-# For other CPU models, please refer to their README for help
-git clone -b dev-difftest --single-branch https://github.com/OpenXiangShan/rocket-chip.git
-cd rocket-chip && make init && make bootrom
-make emu XFUZZ=1 REF=$SPIKE_HOME/difftest/build/riscv64-spike-so LLVM_COVER=1 -j16
-
-# Run the fuzzer for 100 inputs
-./build/fuzzer -f --max-runs 100 --corpus-input $CORPUS -- --max-cycles 10000
+```text
+dv/verilator/simple_system_sbfl/
+├── ibex_simple_system_sbfl.core       # FuseSoC/Verilator integration
+├── ibex_sbfl_setup.core               # setup and Rust build hooks
+├── src/csrc/                          # simulator, coverage, state, Spike bridge
+└── sbfl/                              # this Rust crate
 ```
 
-If you are using [NEMU](https://github.com/OpenXiangShan/NEMU) as the REF with LLVM branch coverage instrumented, you may build it
-with the following commands: `make staticlib CC="clang -fsanitize-coverage=trace-pc-guard -fsanitize-coverage=pc-table -g" CXX="clang++ -fsanitize-coverage=trace-pc-guard -fsanitize-coverage=pc-table -g"`.
-If you are not using LLVM branch coverage, you can simply follow the NEMU docs to build the general-purpose dynamic library `.so` file.
+The main runtime flow is:
 
-If you are fuzzing the [XiangShan](https://github.com/OpenXiangShan/XiangShan) RISC-V processor, for example, with LLVM branch coverage instrumented NEMU,
-you can use the following command *after* you build the static NEMU library: `make emu XFUZZ=1 REF=$NEMU_HOME/build/libriscv64-nemu-interpreter.a LLVM_COVER=1 EMU_THREADS=16 WITH_CHISELDB=0 WITH_CONSTANTIN=0 EMU_TRACE=1 CONFIG=FuzzConfig`.
-If you are not using LLVM branch coverage, please read the following sections carefully and try the flow by yourself.
-
-## Integrating Hardware Designs
-
-This repository is not a self-running repository.
-The created static library `libfuzzer.a` is expected be linked into a simulation runner.
-For example, it could be passed to [Verilator](https://github.com/verilator/verilator) as an external library for linking.
-The required interfaces between Rust and C/C++ modules are listed exclusively at [the harness file](src/harness.rs).
-
-We have upgraded the [DiffTest](https://github.com/OpenXiangShan/difftest) environment to support these interfaces.
-Please refer to the [DiffTest README.md](https://github.com/OpenXiangShan/difftest/blob/master/README.md) for connecting your CPU design with the fuzzer.
-
-Specifically, for the coverage guidance for fuzzing, currently both C++ branch coverage via LLVM sanitizer and FIRRTL-instrumented coverage are supported.
-For C++ branch coverage, both [Spike](https://github.com/OpenXiangShan/riscv-isa-sim) and [NEMU](https://github.com/OpenXiangShan/NEMU) are supported.
-For FIRRTL-instrumented coverage, please refer to the [Coverage Instrumentation for Chisel Designs section](#coverage-instrumentation-for-chisel-designs) of this README.
-Each of the supported coverage metrics can exist independently and is configurable in the building steps.
-The build commands are self-explained and we assume the users can understand them easily.
-
-Once you build the simulation executable, [xfuzz](xfuzz) provides some Python scripts to run the fuzzer and parse the outputs.
-
-## Coverage Instrumentation for Chisel Designs
-
-### CIRCT Passes
-
-To instrument coverage for latest Chisel designs, please use the customized FIRTOOL toolchain from [OpenXiangShan](https://github.com/OpenXiangShan/circt).
-
-### Scala FIRRTL Transforms
-
-**Warning (September 2025): Chisel 3 has been deprecated in DiffTest. If you are using these SFC transforms, please use an older version of DiffTest (no later than [8504ad8](https://github.com/OpenXiangShan/difftest/commit/8504ad8ddf1a3b82f407b983eae14bef34358370)).**
-
-To instrument Chisel coverage metrics into your Chisel designs and use them as the coverage feedback for fuzzing, we provide some useful FIRRTL transforms in the `instrumentation` directory.
-These transforms are mostly migrated from some other projects, including [ekiwi/rfuzz](https://github.com/ekiwi/rfuzz), [compsec-snu/difuzz-rtl](https://github.com/compsec-snu/difuzz-rtl), and [ekiwi/simulator-independent-coverage](https://github.com/ekiwi/simulator-independent-coverage).
-
-It's worth noting current instrumentation transforms support only Chisel<=3.6.0 designs due to FIRRTL constains.
-For a reference design, please refer to the [rocket-chip](https://github.com/OpenXiangShan/rocket-chip/tree/dev-difftest) project.
-Generally, the requirements include: 1) adding the submodule and the Scala compilation recipe to your Chisel design (example at [here](https://github.com/OpenXiangShan/rocket-chip/blob/dev-difftest/build.sc#L87-L111)), and 2) enabling FIRRTL transforms when necessary (example at [here](https://github.com/OpenXiangShan/rocket-chip/blob/dev-difftest/generator/chisel3/ccover.patch)).
-
-Once you have successfully instrumented your Chisel design, tell the DiffTest to include FIRRTL coverage metrics using `FIRRTL_COVER=your_choice_1,your_choice_2`.
-Then, the generated coverage files (`build/generated-src/firrtl-cover.*`) will be detected and captured by DiffTest.
-The Chisel/FIRRTL coverage metrics will have names as `firrtl.your_choice1` and `firrtl.your_choice2`.
-Lastly, replace the default `llvm.branch` coverage feedback for fuzzing with the new ones when calling the fuzzer.
-
-All supported Chisel/FIRRTL coverage metrics are listed in the `CoverPoint.getTransforms` function [here](instrumentation/src/xfuzz/CoverPointTransform.scala).
-
-We sincerely thank the original authors for these FIRRTL transforms.
-The rights of the source code are reserved by the original repositories and authors.
-If you don't like this project integrating your code, please feel free to tell us through GitHub issues to allow us remove them.
-
-An example to build rocket-chip with FIRRTL coverage instrumentation is as follows.
-It is required to build the spike-so (without `SANCOV=1`) before `make emu`.
-If you are building the spike-so with `SANCOV=1`, please add `LLVM_COVER=1` as well.
-
-```bash
-git clone -b dev-difftest --single-branch https://github.com/OpenXiangShan/rocket-chip.git
-cd rocket-chip && make init && make bootrom
-
-# Apply the patch to include command line arguments and coverage transforms
-git apply generator/chisel3/ccover.patch
-
-# Add the ccover directory. You may instead add it as a git submodule if you want to track the changes
-git clone https://github.com/OpenXiangShan/xfuzz.git ccover
-
-# Now build the fuzzer with FIRRTL_COVER instead of LLVM_COVER
-# Please make sure you have successfully built the spike-so at SPIKE_HOME without SANCOV=1
-# To see the full list of supported FIRRTL coverage metrics, please read this README again
-make emu REF=$SPIKE_HOME/difftest/build/riscv64-spike-so XFUZZ=1 FIRRTL_COVER=mux,control,line,toggle,ready_valid -j16
+```text
+ELF input
+  -> Rust LibAFL executor
+  -> sim_main() in the C++ simulator
+  -> Ibex/Spike differential execution
+  -> coverage and architectural-state observers
+  -> interesting passing corpus
+  -> SBFL scoring
+  -> coverage-point / RTL-block ranking
 ```
 
-You may refer to the [FuzzingNutShell](https://github.com/poemonsense/FuzzingNutShell) repo for a demo.
+## Prerequisites
+
+The integration requires:
+
+- a Rust toolchain with Cargo;
+- [`cargo-make`](https://github.com/sagiegurari/cargo-make);
+- FuseSoC and Verilator as required by the Ibex project;
+- the Ibex co-simulation build of Spike;
+- `pkg-config` entries for `riscv-riscv`, `riscv-disasm`, and `riscv-fdt`.
+
+For example, after installing the Ibex co-simulation Spike under
+`/opt/spike-cosim`:
+
+```bash
+export PKG_CONFIG_PATH=/opt/spike-cosim/lib/pkgconfig:${PKG_CONFIG_PATH}
+cargo install cargo-make
+```
+
+The FuseSoC pre-build hook invokes `cargo make build-all` from `IBEX_HOME`, so
+set `IBEX_HOME` to the Ibex repository root.
+
+## Build
+
+From the Ibex repository root:
+
+```bash
+export IBEX_HOME="$PWD"
+
+fusesoc --cores-root=. run \
+  --target=sim \
+  --setup \
+  --build \
+  lowrisc:ibex:ibex_simple_system_sbfl \
+  --RV32E=0 \
+  --RV32M=ibex_pkg::RV32MFast
+```
+
+The build hook produces `target/release/libcpusbfl.so`; the final executable is
+normally:
+
+```text
+build/lowrisc_ibex_ibex_simple_system_sbfl_0/sim-verilator/Vibex_simple_system
+```
+
+Set a convenience variable for the examples below:
+
+```bash
+SBFL_BIN=build/lowrisc_ibex_ibex_simple_system_sbfl_0/sim-verilator/Vibex_simple_system
+"$SBFL_BIN" --help
+```
+
+## Quick Start
+
+### 1. Generate passing cases with PSBFL
+
+The initial ELF must reproduce a differential failure. A passing initial case
+is rejected because it cannot serve as the failed spectrum.
+
+```bash
+"$SBFL_BIN" \
+  --coverage verilator.branch,verilator.line \
+  --state PCState,ArchIntRegState,CSRState \
+  generation \
+  --input path/to/failing.elf \
+  --output out/psbfl \
+  --max-iters 100 \
+  --max-run-timeout 10 \
+  --top-pass 10 \
+  --selection diverse \
+  --metric ochiai \
+  psbfl \
+  --mutator-window-size 20 \
+  --mutator-weight-strategy uniform \
+  -- -c 5000000
+```
+
+### 2. Generate passing cases with WitHW
+
+```bash
+"$SBFL_BIN" \
+  --coverage verilator.branch,verilator.line \
+  --state PCState,ArchIntRegState,CSRState \
+  generation \
+  --input path/to/failing.elf \
+  --output out/withw \
+  --save-corpus out/withw.corpus \
+  --checkpoint-interval 25 \
+  --selection diverse \
+  wit-hw \
+  --max-corpus-size 50 \
+  --init-seed-rate 0.2 \
+  --mutate-rate 0.2 \
+  --priority-alpha 0.1 \
+  --failed-reward 5.0 \
+  -- -c 5000000
+```
+
+### 3. Resume generation
+
+`--max-iters` is the number of additional iterations in the resumed run.
+
+```bash
+"$SBFL_BIN" \
+  --coverage verilator.branch,verilator.line \
+  --state PCState,ArchIntRegState,CSRState \
+  generation \
+  --resume-corpus out/withw.corpus \
+  --save-corpus out/withw-next.corpus \
+  --max-iters 100 \
+  wit-hw \
+  -- -c 5000000
+```
+
+### 4. Re-run analysis from a checkpoint
+
+Analysis can change case selection, SBFL metric, and RTL mapping without
+regenerating the corpus. Coverage names, state names, and tracker window size
+must match the saved checkpoint.
+
+```bash
+"$SBFL_BIN" \
+  --coverage verilator.branch,verilator.line \
+  --state PCState,ArchIntRegState,CSRState \
+  analysis \
+  --input out/withw.corpus \
+  --output out/reanalysis \
+  --tracker-window-size 20 \
+  --selection sort \
+  --metric barinel \
+  --top-pass 10 \
+  --top-sus 20 \
+  -- -c 5000000
+```
+
+### 5. Run workloads without fuzzing
+
+Arguments before the first hyphen-prefixed argument are treated as ELF
+workloads; the remaining values are forwarded to the simulator.
+
+```bash
+"$SBFL_BIN" workload --repeat 1 -- path/to/program.elf -c 5000000
+```
+
+## Command Layout
+
+```text
+Vibex_simple_system [ROOT OPTIONS] workload   [OPTIONS] -- [WORKLOADS...] [SIM ARGS...]
+Vibex_simple_system [ROOT OPTIONS] generation [OPTIONS] <psbfl|random|wit-hw> [MODE OPTIONS] -- [SIM ARGS...]
+Vibex_simple_system [ROOT OPTIONS] analysis   [OPTIONS] -- [SIM ARGS...]
+```
+
+Root options such as `--coverage` and `--state` must precede the command.
+Generation options must precede the generation mode; mode-specific options
+must follow it. Run `--help` at each level for the authoritative option list.
+
+## Output
+
+With `--output DIR`, the run may create:
+
+- `init_case.elf`, plus `.cover` and `.state` with `--save-intermediate`;
+- `rank_<rank>_id_<id>_dst_<distance>.elf` for selected passing cases;
+- matching `.cover` and `.state` files with `--save-intermediate`;
+- `result.log` with coverage-point and optional RTL-block rankings;
+- `blocks.json` when RTL mapping is enabled;
+- `reducing_time.txt`, `fuzzing_time.txt`, `gen_time.txt`, and
+  `sbfl_time.txt` when their corresponding phases run;
+- optional reduced initial ELFs when `--reduce-insts --save-reduce` is used.
+
+Use a fresh output directory. Several artifacts are intentionally created with
+exclusive-create semantics and will not overwrite an existing file.
+
+## Technical Documentation
+
+The detailed implementation documentation is organized by chapter:
+
+1. [Architecture and execution flow](docs/01-architecture.md)
+2. [CLI and workflows](docs/02-cli-and-workflows.md)
+3. [Coverage, state tracking, and FFI](docs/03-data-and-ffi.md)
+4. [Corpus generation strategies](docs/04-generation-strategies.md)
+5. [Selection and SBFL analysis](docs/05-analysis.md)
+6. [Checkpoints and artifacts](docs/06-checkpoints-and-artifacts.md)
+7. [Development and extension guide](docs/07-development.md)
+
+See the [documentation index](docs/README.md) for suggested reading paths.
+
+## Batch Runs
+
+The Ibex repository also provides wrappers under `scripts/`:
+
+- `scripts/run_bugset_psbfl.sh` for `GenerationMode::PSBFL`;
+- `scripts/run_bugset_withw.sh` for `GenerationMode::WitHW`;
+- `scripts/run_bugset_sbfl.sh` as their shared runner.
+
+For the batch wrappers, `--save-corpus` is a boolean flag. Each case writes its
+checkpoint to `<case_logdir>/saved_corpus`.
+
+Use each wrapper's `--help` for batch-specific options.
+
+## Development Checks
+
+From the Ibex workspace root:
+
+```bash
+cargo fmt --all -- --check
+RUSTC_WRAPPER= cargo check -p cpusbfl
+RUSTC_WRAPPER= cargo clippy -p cpusbfl --all-targets
+```
+
+Set `RUST_LOG=debug` or `RUST_LOG=trace` for detailed selection, mutation, and
+coverage diagnostics.
 
 ## License
 
-This project is licensed under [the Mulan Permissive Software License, Version 2](LICENSE) except explicit specified.
-All files in the `instrumentation` directory are licensed under their original licenses with rights reserved by the original repositories and authors.
-
-This project has been adopted by researchers from academia and industry.
-We appreciate their contributions for the open-source community.
-Your valuable Issues and Pull Requests are always welcomed.
-
-- PathFuzz: Broadening Fuzzing Horizons with Footprint Memory for CPUs. Institute of Computing Technology, Chinese Academy of Sciences. DAC'24. [DOI (ACM, Open Access)](https://doi.org/10.1145/3649329.3655911), [Presentation (ChinaSys)](https://drive.google.com/file/d/1SfXSfWkwMqqVNuTauUpFvfP5Q5JV2oMw/view?usp=sharing).
-- BMCFuzz: Hybrid Verification of Processors by Synergistic Integration of Bound Model Checking and Fuzzing. Institute of Software, Chinese Academy of Sciences. ICCAD'25. More information on [BMCFuzz GitHub Repo](https://github.com/iscas-versys/BMCFuzz).
+This crate is licensed under the [Mulan Permissive Software License, Version
+2](LICENSE). The surrounding Ibex integration also contains files under their
+respective upstream licenses.

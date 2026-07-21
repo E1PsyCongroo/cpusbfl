@@ -9,10 +9,7 @@ use std::{
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-use crate::{
-    coverage::CoverageKind::U64,
-    harness::{set_cover_feedback as ffi_set_cover_feedback, *},
-};
+use crate::harness::{set_cover_feedback as ffi_set_cover_feedback, *};
 
 unsafe fn set_cover_feedback(cover_name: &str) {
     unsafe { ffi_set_cover_feedback(CString::new(cover_name.as_bytes()).unwrap().as_ptr()) }
@@ -221,7 +218,7 @@ impl Hash for AnyCoverage {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug, Default)]
 pub(crate) struct Coverages {
     covers: HashMap<String, AnyCoverage>,
 }

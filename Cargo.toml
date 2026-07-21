@@ -1,6 +1,6 @@
 [package]
 name = "cpusbfl"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Spectrum-Based Fault Localization for General-Purpose Hardware Designs Using Software Fuzzers"
 

@@ -15,11 +15,11 @@ pub(crate) fn report_result(
     top_sus: u64,
     metric: SpectrumMetric,
     case_metas: Vec<CaseMetadata>,
-    rtl_path: &Option<String>,
-    include_paths: &Option<Vec<String>>,
-    top_module: &Option<String>,
-    top_scope: &Option<String>,
-    output: &Option<String>,
+    rtl_path: Option<impl AsRef<Path>>,
+    include_paths: Option<&[PathBuf]>,
+    top_module: Option<&str>,
+    top_scope: Option<&str>,
+    output: Option<impl AsRef<Path>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let rtl_info =
         match (rtl_path, include_paths, top_module, top_scope) {
@@ -48,14 +48,11 @@ pub(crate) fn report_result(
 
     let mut result_fs = output
         .as_ref()
-        .map(|dirname| {
-            let dirname = Path::new(dirname);
-            File::create_new(dirname.join("result.log"))
-        })
+        .map(|dirname| File::create_new(dirname.as_ref().join("result.log")))
         .transpose()?;
 
     info_and_writeln(
-        &mut result_fs,
+        result_fs.as_mut(),
         format_args!("Suspiciousness of cover points:"),
     )?;
     for (rank, (cover_name, point, score)) in
@@ -72,7 +69,7 @@ pub(crate) fn report_result(
         );
 
         info_and_writeln(
-            &mut result_fs,
+            result_fs.as_mut(),
             format_args!(
                 "top-{}: CoverPoint '{}' with suspicious '{:.6}'",
                 rank + 1,
@@ -89,18 +86,18 @@ pub(crate) fn report_result(
             &include_paths,
             &top_module,
             &top_scope,
-            output,
+            output.as_ref(),
         )?;
 
         let mut seen = HashSet::new();
 
         ranked_blocks.retain(|(scope, bid, _score)| seen.insert((scope.clone(), *bid)));
 
-        info_and_writeln(&mut result_fs, format_args!("Suspiciousness of block:"))?;
+        info_and_writeln(result_fs.as_mut(), format_args!("Suspiciousness of block:"))?;
 
         for (rank, (scope, bid, score)) in ranked_blocks.iter().take(top_sus as usize).enumerate() {
             info_and_writeln(
-                &mut result_fs,
+                result_fs.as_mut(),
                 format_args!(
                     "top-{}: Block(scope: {}, bid: {}) with suspicious '{:.6}'",
                     rank + 1,
@@ -115,10 +112,10 @@ pub(crate) fn report_result(
     Ok(())
 }
 
-fn info_and_writeln(output: &mut Option<File>, args: fmt::Arguments<'_>) -> io::Result<()> {
+fn info_and_writeln(output: Option<&mut File>, args: fmt::Arguments<'_>) -> io::Result<()> {
     log::info!("{args}");
 
-    if let Some(file) = output.as_mut() {
+    if let Some(file) = output {
         writeln!(file, "{args}")?;
     }
 
@@ -155,15 +152,14 @@ fn get_module_files<P: AsRef<Path>>(path: P) -> Vec<PathBuf> {
 
 fn sus_point2block(
     sus_points: &[(String, usize, f64)],
-    rtl_path: &String,
-    include_paths: &[String],
-    top_module: &String,
-    top_scope: &String,
-    output: &Option<String>,
+    rtl_path: impl AsRef<Path>,
+    include_paths: &[PathBuf],
+    top_module: &str,
+    top_scope: &str,
+    output: Option<impl AsRef<Path>>,
 ) -> Result<Vec<(String, u64, f64)>, Box<dyn std::error::Error>> {
     let rtl_files = get_module_files(&rtl_path);
-    let includes = include_paths.iter().map(PathBuf::from).collect::<Vec<_>>();
-    let block_mgr = BlockManager::new(&rtl_files, &includes, &top_module, &top_scope);
+    let block_mgr = BlockManager::new(&rtl_files, include_paths, &top_module, &top_scope);
     let all_blocks = block_mgr.get_all_blocks();
     let sbfl_blocks: Vec<_> = all_blocks
         .iter()

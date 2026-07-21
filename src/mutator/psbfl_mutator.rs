@@ -51,7 +51,7 @@ impl PSBFLMutator {
         init_bytes: &I,
         pc_trace: &StateTracker<PCState>,
         strategy: PSBFLMutationStrategy,
-        window_size: u64,
+        window_size: usize,
     ) -> Result<Self, Box<dyn std::error::Error>>
     where
         I: HasMutatorBytes,
@@ -71,7 +71,6 @@ impl PSBFLMutator {
             return Err("pc_trace is empty".into());
         }
 
-        let window_size = usize::try_from(window_size)?;
         let start = trace.len().saturating_sub(window_size);
         let window = &trace[start..];
 

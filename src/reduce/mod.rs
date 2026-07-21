@@ -4,6 +4,8 @@ mod strip_prefix;
 mod strip_suffix;
 mod trim;
 
+use std::path::PathBuf;
+
 use libafl::prelude::*;
 
 use crate::coverage::*;
@@ -60,7 +62,7 @@ pub(crate) fn reduce_fault_case(
     input: BytesInput,
     original: StateTrackers,
     save_reduce: bool,
-    output_dir: &Option<String>,
+    output_dir: Option<&PathBuf>,
 ) -> BytesInput {
     assert!(original.len() > 0);
     let output_dir = output_dir.as_deref();
