@@ -75,7 +75,7 @@ pub(super) fn emit_and_report(
     top_module: Option<&str>,
     top_scope: Option<&str>,
 ) -> AppResult {
-    let passed_cov = emit_top_passed_testcases(
+    let passed_cases = emit_top_passed_testcases(
         session,
         output.as_ref(),
         cover_distance_weight,
@@ -90,7 +90,7 @@ pub(super) fn emit_and_report(
     report_result(
         top_sus,
         metric,
-        passed_cov,
+        passed_cases,
         rtl_path,
         include_paths,
         top_module,

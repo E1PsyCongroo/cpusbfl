@@ -43,11 +43,16 @@ pub(crate) fn calculate_suspiciousness(
 }
 
 fn calculate_coverage_stats(cover_name: &str, case_metas: &[CaseMetadata]) -> Vec<CoverageStats> {
-    let len = cover_len(cover_name);
+    let len = case_metas
+        .iter()
+        .find(|case_meta| !case_meta.is_passed)
+        .expect("calculate_coverage_stats requires at least one failing case")
+        .covers
+        .len(cover_name);
     assert!(
         case_metas
             .iter()
-            .all(|case_cov| case_cov.covers.len(cover_name) == len)
+            .all(|case_meta| case_meta.covers.len(cover_name) == len)
     );
 
     let mut cover_stats = vec![

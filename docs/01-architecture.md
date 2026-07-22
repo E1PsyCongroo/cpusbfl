@@ -2,17 +2,19 @@
 
 ## 1.1 设计目标
 
-本项目针对“已知某个 ELF 能触发 DUT/参考模型差分失败”的场景。核心目标不是寻找
-任意 crash，而是围绕这个失败程序生成行为相近但能够通过差分检查的程序，以构造
-SBFL 所需的失败/通过频谱。
+本项目面向“已有一个 ELF 能暴露 DUT/参考模型差异”的场景。它围绕该失败输入生成行为
+相近但能够通过比较的程序，以构造 SBFL 所需的失败/通过频谱。
 
-当前实现把以下职责组合在同一个最终进程中：
+项目本身负责：
 
-- Verilator 执行 Ibex RTL；
-- Spike 作为参考模型进行 co-simulation；
-- C++ 侧收集 Verilator coverage 和 Spike 体系结构状态；
-- Rust/LibAFL 负责输入变异、corpus、调度和 checkpoint；
-- Rust 分析层选择通过用例、计算可疑度并映射 RTL block。
+- LibAFL 输入变异、corpus、feedback、调度和 checkpoint；
+- coverage/state observer；
+- 通过用例选择和距离计算；
+- SBFL 可疑度计算；
+- ELF/覆盖率约简和 RTL block 映射；
+- 调用宿主仿真器并读取宿主提供的数据。
+
+具体 DUT、参考模型、仿真器构建方式和实验编排由宿主集成负责。
 
 ## 1.2 组件关系
 
@@ -20,119 +22,101 @@ SBFL 所需的失败/通过频谱。
 flowchart LR
     CLI[Clap CLI / app] --> Fuzzer[LibAFL fuzzer]
     Fuzzer --> Harness[Rust harness]
-    Harness -->|C ABI: sim_main| Sim[C++ Verilator runner]
-    Sim --> DUT[Ibex RTL]
-    Sim --> REF[Spike co-simulation]
-    DUT --> Cov[C++ Verilator coverage]
-    REF --> State[C++ architectural state trackers]
-    Cov -->|C ABI| Obs[Rust observers]
-    State -->|C ABI| Obs
+    Harness -->|C ABI: sim_main| Host[Host simulator]
+    Host --> DUT[DUT]
+    Host --> REF[Reference model]
+    Host -->|coverage/state C ABI| Obs[Rust observers]
     Obs --> Fuzzer
     Fuzzer --> Corpus[Corpus / checkpoint]
     Corpus --> Select[Passing-case selection]
     Select --> SBFL[Spectrum metrics]
-    SBFL --> RTL[Coverage-point and RTL-block ranking]
+    SBFL --> RTL[Coverage-point / RTL-block ranking]
 ```
-
-主要组件如下：
 
 | 组件 | 职责 |
 | --- | --- |
-| `libcpusbfl.so` | Rust `cdylib`，包含 CLI 入口、LibAFL 和分析代码 |
-| `Vibex_simple_system` | 最终可执行程序，链接 Rust 动态库和 Verilator 模型 |
-| `simple_system_sbfl.cc` | 提供 `sim_main`，每次输入执行时重置仿真上下文和统计对象 |
-| `cosim_stats.cc` | 向 Rust 暴露 coverage/state C ABI |
-| `coverage.cc` | 解析 Verilator coverage 文件并按 group 提供计数器 |
-| `state_tracker.cc` | 保存 Spike 的 PC、整数寄存器和 CSR 序列 |
-| `harness.rs` | 把 `BytesInput` 写入临时 ELF 并调用 `sim_main` |
-| `fuzzer.rs` | 创建 observer、feedback、executor、corpus 和 fuzz loop |
-| `selection.rs` / `spectrum/` | 选择通过用例并计算 SBFL 分数 |
+| `libcpusbfl.so` | `cdylib`，包含 CLI、LibAFL 和分析实现 |
+| 宿主 executable | 链接动态库并提供仿真器与 C ABI |
+| `harness.rs` | 将 `BytesInput` 写入临时 ELF 并调用 `sim_main` |
+| `observer/` | 在每次运行后读取 coverage/state |
+| `fuzzer.rs` | 构造 executor、feedback、corpus 和 fuzz loop |
+| `selection.rs` | 过滤并选择通过用例 |
+| `spectrum/` | 构造频谱并计算可疑度 |
+| `block/` | 将覆盖点映射到 SystemVerilog block |
 
-## 1.3 构建和链接
+## 1.3 构建和链接边界
 
-`Cargo.toml` 将 crate 类型设置为 `cdylib`。FuseSoC core
-`ibex_simple_system_sbfl.core` 在链接阶段添加：
+`Cargo.toml` 将 crate 类型设置为 `cdylib`。`cargo build --release` 只生成
+`libcpusbfl.so`；宿主需要在自己的构建系统中链接该动态库，并实现
+[第 3 章](03-data-and-ffi.md)列出的符号。
 
-```text
--LDFLAGS "$IBEX_HOME/target/release/libcpusbfl.so"
-```
+Rust 导出的 `main` 符号作为链接后 executable 的命令入口。反方向上，宿主向 Rust
+提供 `sim_main` 以及 coverage/state 访问函数。因此：
 
-依赖的 `ibex_sbfl_setup.core` 在 pre-build 阶段执行两个 hook：
-
-1. 通过 `pkg-config` 检查 Spike 的 `riscv-riscv`、`riscv-disasm`、
-   `riscv-fdt`；
-2. 在 `IBEX_HOME` 执行 `cargo make build-all`，生成 release 动态库。
-
-Rust 导出的 `main` 符号成为最终模拟器的命令入口；C++ 则向 Rust 提供 `sim_main`
-和统计接口。因此只构建 Rust crate 可以得到动态库，但不能得到一个可独立工作的
-SBFL executable。
+- 本项目可以独立完成 Rust 静态检查和动态库构建；
+- 完整执行验证必须由某个宿主集成提供仿真器；
+- 宿主专属工具链和构建参数不应写入本项目文档。
 
 ## 1.4 进程启动
 
-`app::run` 完成以下步骤：
+`app::run` 的主要步骤为：
 
-1. 从 `RUST_LOG` 初始化 `env_logger`，缺省级别为 `info`；
+1. 初始化日志；
 2. 使用 Clap 解析根参数和子命令；
-3. 根据 `workload`、`generation`、`analysis` 分派到对应模块；
-4. 初始化 coverage/state 全局对象和仿真器参数；
-5. 执行仿真或载入 checkpoint。
+3. 分派到 `workload`、`generation` 或 `analysis`；
+4. 初始化 coverage/state 全局对象和宿主参数；
+5. 执行仿真或加载 checkpoint。
 
-Coverage、state tracker 和 simulator arguments 使用 `OnceLock<Mutex<_>>`。这意味着
-它们是进程级单例，设计前提是一次进程只执行一套 coverage/state 配置。
+Coverage、state tracker 和 host arguments 使用进程级单例。一次进程应只使用一套
+coverage/state 配置。
 
-## 1.5 单次仿真
+## 1.5 单次执行
 
-`harness::fuzz_harness` 的单次执行顺序是：
+`harness::fuzz_harness` 的执行顺序为：
 
-1. 把 LibAFL `BytesInput` 写入临时 ELF；
-2. 构造模拟器参数 `emu -E <temp-elf> ...`；
-3. 调用 C++ `sim_main(argc, argv)`；
-4. C++ 重置 Verilator controller 和 `CosimStats`；
-5. Ibex 与 Spike 执行差分检查；
-6. C++ coverage extension 在 `PostExec` 中导出并解析 Verilator coverage；
-7. Spike 每推进一个相关状态点时更新 state tracker；
-8. Rust 通过 FFI 拉取 coverage 和 state；
-9. `sim_main == 0` 映射为 `ExitKind::Ok`，非零映射为 `ExitKind::Crash`。
+1. 将 `BytesInput` 写入临时 ELF；
+2. 构造 `emu -E <temporary-elf> <host-arguments...>`；
+3. 调用宿主 `sim_main(argc, argv)`；
+4. 宿主重置上一次运行的仿真和统计状态；
+5. 宿主运行 DUT/参考模型比较；
+6. Rust 通过 C ABI 拉取 coverage 和 state；
+7. `sim_main == 0` 映射为 `ExitKind::Ok`，非零映射为 `ExitKind::Crash`。
 
-这里的 `Crash` 表示仿真器返回非零，通常是差分失败，不等同于操作系统信号意义上的
+这里的 `Crash` 表示宿主返回非零，通常代表比较失败，不一定是操作系统信号意义上的
 进程崩溃。
 
 ## 1.6 Generation 流程
 
-新 generation session 的状态机如下：
+新 session 的状态机为：
 
-1. 从 `--input` 读取 ELF；目录输入时选择按路径排序后的第一个普通文件；
-2. 可选执行 `--reduce-insts`；
-3. 运行初始 ELF，要求其结果为 `Crash` 且能被 feedback 接受进主 corpus；
-4. 从初始失败 trace 构建 mode-specific mutator；
-5. 迭代执行“调度 parent → 变异 ELF → 仿真 → observer → feedback → corpus”；
-6. 可按间隔和结束时保存 checkpoint；
-7. 除非指定 `--gen-only`，继续选择通过用例并执行 SBFL。
+1. 从 `--input` 加载 ELF；目录输入选择路径排序后的第一个普通文件；
+2. 可选执行输入约简；
+3. 运行初始 ELF，要求其失败且被 feedback 接收进主 corpus；
+4. 根据初始失败轨迹构建 mode-specific mutator；
+5. 重复“调度 parent → mutation → 宿主执行 → observer → feedback → corpus”；
+6. 按间隔和结束点保存 checkpoint；
+7. 除非使用 `--gen-only`，继续执行 selection 和 SBFL。
 
-恢复 session 时不再执行初始输入预处理，而是从 checkpoint 重建 `FuzzSession`。
-WitHW scheduler 使用保存的 `initial_corpus_id` 恢复初始失败 seed，动态 mutation
-priority 则通过 LibAFL state metadata 恢复。
+恢复 session 时从 checkpoint 重建 `FuzzSession`，不再执行初始输入预处理。
 
 ## 1.7 Analysis 流程
 
-`analysis` 不再生成新输入：
+`analysis` 不生成新输入：
 
-1. 读取并校验 checkpoint；
-2. 恢复所有 testcase 及其 metadata；
+1. 加载并校验 checkpoint；
+2. 恢复 testcase 及 metadata；
 3. 过滤通过用例；
-4. 根据 coverage/state 距离执行 selection；
-5. 形成一个失败用例加若干通过用例的频谱；
-6. 对每种 coverage 的每个 point 统计 `ef/ep/nf/np`；
+4. 计算 coverage/state 距离并执行 selection；
+5. 形成失败/通过频谱；
+6. 统计各覆盖点的 `ef/ep/nf/np`；
 7. 计算并排序 SBFL 分数；
-8. 如果提供完整 RTL 参数，将 coverage point 映射到层次化 RTL block。
+8. 可选地将覆盖点映射到 RTL block。
 
-普通离线分析主要使用 checkpoint 中保存的数据；启用 `--reduce-cover` 时会重新运行
-部分修改后的 ELF，因此仍依赖可工作的仿真器和相同的运行参数。
+普通离线分析主要使用 checkpoint 数据；启用 `--reduce-cover` 时仍会调用宿主仿真器。
 
-## 1.8 线程和隔离假设
+## 1.8 执行模型
 
-- LibAFL 使用 in-process executor；仿真发生在当前进程，而不是 fork server。
-- 全局 coverage/state 对象由 mutex 保护，但当前流程按单线程执行一次仿真。
-- 一个进程内不支持重新初始化为另一套 coverage/state 名称。
-- 批量 bugset 脚本通过多个独立工作目录和独立进程实现并行，而不是在一个 SBFL
-  进程中并行多个 case。
+- LibAFL 使用 in-process executor；宿主仿真器在当前进程内执行。
+- 当前流程按单线程顺序运行单个输入。
+- 全局 coverage/state 对象在一个 session 内地址稳定。
+- 多实验并行应由宿主在独立进程中编排。

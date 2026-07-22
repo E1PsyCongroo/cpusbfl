@@ -5,7 +5,7 @@
 最终 executable 的命令层级为：
 
 ```text
-Vibex_simple_system [ROOT OPTIONS] <COMMAND>
+<sbfl-host> [ROOT OPTIONS] <COMMAND>
 
 COMMAND := workload | generation | analysis
 generation := generation [GENERATION OPTIONS] <psbfl|random|wit-hw> [MODE OPTIONS]
@@ -162,22 +162,7 @@ hyphen-prefixed value 开始的部分作为模拟器参数。推荐始终显式�
 Fuzzer 在仿真参数中还会追加 `-I <max-inst>`，其中 `max-inst` 来自当前 state tracker
 长度，用于限制后续变异程序的执行步数。
 
-## 2.9 Batch runner
-
-Ibex 仓库根目录的脚本在隔离 workdir 中为 bugset 应用 `.sv.diff`、重新构建模拟器并
-执行 generation：
-
-- `run_bugset_psbfl.sh` 固定选择 `psbfl`；
-- `run_bugset_withw.sh` 固定选择 `wit-hw`；
-- `run_bugset_sbfl.sh` 负责共享校验、构建、日志和并发控制。
-
-脚本参数与当前 CLI 对齐，但 `--logs`、`--tmp`、`--jobs` 等属于 batch runner，
-不是 SBFL executable 参数。wrapper 的 `--input` 会先解析为绝对路径再传给 executable；
-wrapper 的 `--save-corpus` 是不带值的布尔开关，并把每个 case 的 checkpoint 保存为
-`<case_logdir>/saved_corpus`。这与 executable 自身需要
-`--save-corpus <FILE>` 的接口不同。
-
-## 2.10 常见参数错误
+## 2.9 常见参数错误
 
 - 把 `--coverage` 放在 `generation` 后：根参数位置错误。
 - 把 `--max-iters` 放在 `psbfl` 后：generation 参数被当成 mode 参数。

@@ -1,160 +1,150 @@
-# CPU SBFL for the Ibex Simple System
+# CPU SBFL
 
 [中文](README_CN.md) | English
 
-`cpusbfl` combines differential simulation, software-input fuzzing, and
-spectrum-based fault localization (SBFL) for the Ibex Verilator simple system.
-It starts from an ELF program that reproduces an Ibex/Spike mismatch, mutates
-executable instructions to collect passing counterexamples, and ranks
-instrumented RTL coverage points—and optionally RTL data-flow blocks—by
+`cpusbfl` is a Rust library for software-driven, spectrum-based fault
+localization of processor RTL. Starting from an executable input that exposes
+a DUT/reference-model mismatch, it mutates executable instructions, collects
+passing counterexamples, and ranks coverage points or parsed RTL blocks by
 suspiciousness.
 
-The Rust crate is built as `libcpusbfl.so` and linked into
-`Vibex_simple_system`. It is not a standalone `cargo run` application: the
-final executable provides the simulator, Spike co-simulation, coverage, and
-state-tracking callbacks required by the Rust library.
+The crate builds as `libcpusbfl.so`. It is not a standalone `cargo run`
+application: a host simulator must link the library, provide the C ABI declared
+by `src/harness.rs`, and expose coverage and architectural-state observations.
+Host-specific build systems, simulator setup, and experiment runners belong to
+the host integration rather than this project.
 
-## Highlights
+## Features
 
-- Three generation modes: `psbfl`, `random`, and `wit-hw`.
-- Verilator line, branch, expression, and toggle coverage support.
-- PC, integer-register, and CSR state-sequence tracking.
-- Coverage- and state-guided LibAFL corpus construction.
-- Random, near-failure sort, and diversity-aware passing-case selection.
-- Nine SBFL metrics: Tarantula, Ochiai, Jaccard, DStar, GP19, Barinel,
-  Crosstab, Zoltar, and Ample.
-- Versioned, checksummed corpus checkpoints for resume and offline analysis.
-- Optional ELF reduction, coverage reduction, and RTL block mapping.
+- `psbfl`, `random`, and `wit-hw` generation strategies;
+- coverage- and state-guided LibAFL corpus construction;
+- PC, integer-register, and CSR state sequences;
+- random, near-failure, and diversity-aware passing-case selection;
+- Tarantula, Ochiai, Jaccard, DStar, GP19, Barinel, Crosstab, Zoltar, and
+  Ample suspiciousness metrics;
+- versioned and checksummed checkpoints for resume and offline analysis;
+- optional ELF reduction, coverage reduction, and RTL block mapping.
 
-## Repository Context
-
-This directory contains the Rust part of the integration. The adjacent
-directory contains the simulator-side implementation:
+## Project Layout
 
 ```text
-dv/verilator/simple_system_sbfl/
-├── ibex_simple_system_sbfl.core       # FuseSoC/Verilator integration
-├── ibex_sbfl_setup.core               # setup and Rust build hooks
-├── src/csrc/                          # simulator, coverage, state, Spike bridge
-└── sbfl/                              # this Rust crate
+src/
+├── app/                   # workload, generation, and analysis workflows
+├── cli/                   # command-line definitions
+├── fuzzer.rs              # LibAFL state, executor, and fuzz loop
+├── harness.rs             # host simulator C ABI
+├── coverage.rs            # coverage groups and point data
+├── state_tracker.rs       # PC/register/CSR sequences
+├── observer/              # LibAFL observers
+├── feedback/              # coverage/state/passing feedback
+├── mutator/               # Random, PSBFL, and WitHW mutators
+├── scheduler/             # adaptive scheduling and corpus bounds
+├── selection.rs           # Random, Sort, and Diverse selection
+├── similarity.rs          # coverage/state distance functions
+├── spectrum/              # spectrum matrices and metrics
+├── block/                 # SystemVerilog block parsing
+├── checkpoint.rs          # checkpoint serialization and validation
+└── reduce/                # executable and coverage reduction
 ```
 
-The main runtime flow is:
+## Requirements and Build
+
+The Rust project requires a recent Rust toolchain and Cargo. Build the shared
+library from this directory:
+
+```bash
+cargo build --release
+```
+
+The result is normally:
 
 ```text
-ELF input
-  -> Rust LibAFL executor
-  -> sim_main() in the C++ simulator
-  -> Ibex/Spike differential execution
-  -> coverage and architectural-state observers
-  -> interesting passing corpus
-  -> SBFL scoring
-  -> coverage-point / RTL-block ranking
+target/release/libcpusbfl.so
 ```
 
-## Prerequisites
+Building the shared library does not create a runnable simulator. The host must
+link it and implement the simulator, coverage, and state callbacks described in
+[the FFI chapter](docs/03-data-and-ffi.md).
 
-The integration requires:
+## Host Interface
 
-- a Rust toolchain with Cargo;
-- [`cargo-make`](https://github.com/sagiegurari/cargo-make);
-- FuseSoC and Verilator as required by the Ibex project;
-- the Ibex co-simulation build of Spike;
-- `pkg-config` entries for `riscv-riscv`, `riscv-disasm`, and `riscv-fdt`.
-
-For example, after installing the Ibex co-simulation Spike under
-`/opt/spike-cosim`:
-
-```bash
-export PKG_CONFIG_PATH=/opt/spike-cosim/lib/pkgconfig:${PKG_CONFIG_PATH}
-cargo install cargo-make
-```
-
-The FuseSoC pre-build hook invokes `cargo make build-all` from `IBEX_HOME`, so
-set `IBEX_HOME` to the Ibex repository root.
-
-## Build
-
-From the Ibex repository root:
-
-```bash
-export IBEX_HOME="$PWD"
-
-fusesoc --cores-root=. run \
-  --target=sim \
-  --setup \
-  --build \
-  lowrisc:ibex:ibex_simple_system_sbfl \
-  --RV32E=0 \
-  --RV32M=ibex_pkg::RV32MFast
-```
-
-The build hook produces `target/release/libcpusbfl.so`; the final executable is
-normally:
+At a high level, one input follows this flow:
 
 ```text
-build/lowrisc_ibex_ibex_simple_system_sbfl_0/sim-verilator/Vibex_simple_system
+ELF bytes
+  -> LibAFL executor
+  -> host sim_main()
+  -> DUT/reference comparison
+  -> coverage and architectural-state callbacks
+  -> corpus feedback
+  -> passing-case selection
+  -> SBFL ranking
 ```
 
-Set a convenience variable for the examples below:
+The host executable owns its simulator-specific arguments. The library appends
+an instruction limit when running generated inputs and treats a nonzero
+`sim_main` return value as a failing case.
 
-```bash
-SBFL_BIN=build/lowrisc_ibex_ibex_simple_system_sbfl_0/sim-verilator/Vibex_simple_system
-"$SBFL_BIN" --help
+## CLI Overview
+
+The linked host executable exposes the following command hierarchy:
+
+```text
+<sbfl-host> [ROOT OPTIONS] workload   [OPTIONS] -- [WORKLOADS...] [HOST ARGS...]
+<sbfl-host> [ROOT OPTIONS] generation [OPTIONS] <psbfl|random|wit-hw> [MODE OPTIONS] -- [HOST ARGS...]
+<sbfl-host> [ROOT OPTIONS] analysis   [OPTIONS] -- [HOST ARGS...]
 ```
 
-## Quick Start
+Root options such as `--coverage` and `--state` precede the command.
+Generation options precede the generation mode, and mode-specific options
+follow it. Use `--help` at each level for the authoritative argument list.
 
-### 1. Generate passing cases with PSBFL
-
-The initial ELF must reproduce a differential failure. A passing initial case
-is rejected because it cannot serve as the failed spectrum.
+### Generate with PSBFL
 
 ```bash
-"$SBFL_BIN" \
+"$SBFL_HOST" \
   --coverage verilator.branch,verilator.line \
   --state PCState,ArchIntRegState,CSRState \
   generation \
   --input path/to/failing.elf \
   --output out/psbfl \
   --max-iters 100 \
-  --max-run-timeout 10 \
-  --top-pass 10 \
   --selection diverse \
-  --metric ochiai \
+  --save-corpus out/psbfl.corpus \
   psbfl \
   --mutator-window-size 20 \
   --mutator-weight-strategy uniform \
-  -- -c 5000000
+  -- <host-arguments>
 ```
 
-### 2. Generate passing cases with WitHW
+The initial input must fail the DUT/reference comparison and must be accepted
+into the main corpus by feedback.
+
+### Generate with WitHW
 
 ```bash
-"$SBFL_BIN" \
+"$SBFL_HOST" \
   --coverage verilator.branch,verilator.line \
   --state PCState,ArchIntRegState,CSRState \
   generation \
   --input path/to/failing.elf \
   --output out/withw \
   --save-corpus out/withw.corpus \
-  --checkpoint-interval 25 \
-  --selection diverse \
   wit-hw \
   --max-corpus-size 50 \
   --init-seed-rate 0.2 \
   --mutate-rate 0.2 \
   --priority-alpha 0.1 \
   --failed-reward 5.0 \
-  -- -c 5000000
+  -- <host-arguments>
 ```
 
-### 3. Resume generation
+### Resume Generation
 
 `--max-iters` is the number of additional iterations in the resumed run.
 
 ```bash
-"$SBFL_BIN" \
+"$SBFL_HOST" \
   --coverage verilator.branch,verilator.line \
   --state PCState,ArchIntRegState,CSRState \
   generation \
@@ -162,17 +152,16 @@ is rejected because it cannot serve as the failed spectrum.
   --save-corpus out/withw-next.corpus \
   --max-iters 100 \
   wit-hw \
-  -- -c 5000000
+  -- <host-arguments>
 ```
 
-### 4. Re-run analysis from a checkpoint
+### Analyze a Checkpoint
 
-Analysis can change case selection, SBFL metric, and RTL mapping without
-regenerating the corpus. Coverage names, state names, and tracker window size
-must match the saved checkpoint.
+Coverage names, state names, and tracker-window size must match the checkpoint.
+Selection, metric, ranking limits, and RTL mapping may be changed.
 
 ```bash
-"$SBFL_BIN" \
+"$SBFL_HOST" \
   --coverage verilator.branch,verilator.line \
   --state PCState,ArchIntRegState,CSRState \
   analysis \
@@ -183,49 +172,24 @@ must match the saved checkpoint.
   --metric barinel \
   --top-pass 10 \
   --top-sus 20 \
-  -- -c 5000000
+  -- <host-arguments>
 ```
-
-### 5. Run workloads without fuzzing
-
-Arguments before the first hyphen-prefixed argument are treated as ELF
-workloads; the remaining values are forwarded to the simulator.
-
-```bash
-"$SBFL_BIN" workload --repeat 1 -- path/to/program.elf -c 5000000
-```
-
-## Command Layout
-
-```text
-Vibex_simple_system [ROOT OPTIONS] workload   [OPTIONS] -- [WORKLOADS...] [SIM ARGS...]
-Vibex_simple_system [ROOT OPTIONS] generation [OPTIONS] <psbfl|random|wit-hw> [MODE OPTIONS] -- [SIM ARGS...]
-Vibex_simple_system [ROOT OPTIONS] analysis   [OPTIONS] -- [SIM ARGS...]
-```
-
-Root options such as `--coverage` and `--state` must precede the command.
-Generation options must precede the generation mode; mode-specific options
-must follow it. Run `--help` at each level for the authoritative option list.
 
 ## Output
 
-With `--output DIR`, the run may create:
+Depending on the command and options, an output directory may contain:
 
-- `init_case.elf`, plus `.cover` and `.state` with `--save-intermediate`;
-- `rank_<rank>_id_<id>_dst_<distance>.elf` for selected passing cases;
+- `init_case.elf` and selected `rank_*.elf` inputs;
 - matching `.cover` and `.state` files with `--save-intermediate`;
 - `result.log` with coverage-point and optional RTL-block rankings;
 - `blocks.json` when RTL mapping is enabled;
-- `reducing_time.txt`, `fuzzing_time.txt`, `gen_time.txt`, and
-  `sbfl_time.txt` when their corresponding phases run;
-- optional reduced initial ELFs when `--reduce-insts --save-reduce` is used.
+- phase timing files;
+- optional intermediate reduced ELF files.
 
-Use a fresh output directory. Several artifacts are intentionally created with
-exclusive-create semantics and will not overwrite an existing file.
+Use a fresh output directory. Several artifacts use exclusive-create semantics
+and intentionally do not overwrite existing files.
 
 ## Technical Documentation
-
-The detailed implementation documentation is organized by chapter:
 
 1. [Architecture and execution flow](docs/01-architecture.md)
 2. [CLI and workflows](docs/02-cli-and-workflows.md)
@@ -237,34 +201,19 @@ The detailed implementation documentation is organized by chapter:
 
 See the [documentation index](docs/README.md) for suggested reading paths.
 
-## Batch Runs
-
-The Ibex repository also provides wrappers under `scripts/`:
-
-- `scripts/run_bugset_psbfl.sh` for `GenerationMode::PSBFL`;
-- `scripts/run_bugset_withw.sh` for `GenerationMode::WitHW`;
-- `scripts/run_bugset_sbfl.sh` as their shared runner.
-
-For the batch wrappers, `--save-corpus` is a boolean flag. Each case writes its
-checkpoint to `<case_logdir>/saved_corpus`.
-
-Use each wrapper's `--help` for batch-specific options.
-
 ## Development Checks
 
-From the Ibex workspace root:
+Run from this project directory:
 
 ```bash
 cargo fmt --all -- --check
-RUSTC_WRAPPER= cargo check -p cpusbfl
-RUSTC_WRAPPER= cargo clippy -p cpusbfl --all-targets
+RUSTC_WRAPPER= cargo check
+RUSTC_WRAPPER= cargo clippy --all-targets --all-features
 ```
 
-Set `RUST_LOG=debug` or `RUST_LOG=trace` for detailed selection, mutation, and
-coverage diagnostics.
+Set `RUST_LOG=debug` or `RUST_LOG=trace` for detailed diagnostics.
 
 ## License
 
-This crate is licensed under the [Mulan Permissive Software License, Version
-2](LICENSE). The surrounding Ibex integration also contains files under their
-respective upstream licenses.
+This project is licensed under the [Mulan Permissive Software License, Version
+2](LICENSE).

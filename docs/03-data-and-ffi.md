@@ -2,8 +2,8 @@
 
 ## 3.1 FFI 边界
 
-Rust 在 `harness.rs` 中声明 C ABI，C++ 在 `simple_system_sbfl.cc` 和
-`cosim_stats.cc` 中实现。
+Rust 在 `harness.rs` 中声明宿主必须实现的 C ABI。宿主可使用 C、C++ 或其他能够导出
+兼容符号的语言实现接口。
 
 | C ABI | 方向 | 用途 |
 | --- | --- | --- |
@@ -22,8 +22,8 @@ Rust 在 `harness.rs` 中声明 C ABI，C++ 在 `simple_system_sbfl.cc` 和
 
 ## 3.2 仿真输入传递
 
-LibAFL 操作内存中的 `BytesInput`，而 Ibex simple system 接收 ELF 路径。桥接层为
-每次执行创建临时文件并写入 input bytes，然后构造：
+LibAFL 操作内存中的 `BytesInput`，当前宿主协议通过 ELF 路径执行程序。桥接层为每次
+执行创建临时文件并写入 input bytes，然后构造：
 
 ```text
 emu -E <temporary-elf> <simulator-extra-args...>
@@ -34,7 +34,7 @@ emu -E <temporary-elf> <simulator-extra-args...>
 
 ## 3.3 Coverage 数据模型
 
-C++ `VerilatorCoverage` 在每次 simulation `PostExec` 中：
+宿主 coverage collector 应在每次执行结束时：
 
 1. 将 Verilator coverage 写到临时文件；
 2. 解析每条 `C '...' count` 记录；
@@ -69,7 +69,7 @@ Coverage hash 在对 `HashMap` entry 排序后计算，因此不依赖 map 的�
 
 ## 3.5 状态序列
 
-C++ 从 Spike processor state 构造三种序列：
+当前 ABI 定义三种体系结构状态序列：
 
 | 名称 | Rust 类型 | 内容 |
 | --- | --- | --- |
@@ -77,8 +77,8 @@ C++ 从 Spike processor state 构造三种序列：
 | `ArchIntRegState` | `[u64; 32]` | 32 个整数寄存器 |
 | `CSRState` | 18 个 `u64` 字段 | privilege mode 及 M/S mode 关键 CSR |
 
-Spike 在退休指令、同步 trap 等相关推进点调用 `stats.update_state`。一次仿真开始时
-`CosimStats::reset` 清空所有序列。
+宿主应在退休指令、同步异常等明确的推进点采样状态，并在每次仿真开始时清空上一次
+执行的所有序列。
 
 Rust `StateTrackers::len()` 取三个 tracker 的最大长度，并要求 CLI 选中的 tracker
 具有同样长度。未知 state 名称会触发 panic。

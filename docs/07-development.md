@@ -25,8 +25,7 @@ src/
 └── reduce/                # 输入与覆盖率约简
 ```
 
-C++ 集成位于 crate 的相邻目录 `../src/csrc/`，FuseSoC core 文件和构建 hook 位于
-`../ibex_simple_system_sbfl.core` 与 `../ibex_sbfl_setup.core`。
+宿主集成不属于本项目目录。宿主应在自己的仓库中维护 C ABI 实现、构建系统和运行脚本。
 
 ## 7.2 本地检查
 
@@ -39,12 +38,11 @@ RUSTC_WRAPPER= cargo clippy --all-targets --all-features
 ```
 
 `RUSTC_WRAPPER=` 用于避免调用者环境中遗留的 wrapper 影响检查；如果本地未设置 wrapper，
-可省略。完整集成构建需要 Spike 的 `pkg-config` 文件及 Verilator/FuseSoC 环境，命令见
-[README_CN](../README_CN.md#构建)。
+可省略。完整集成验证还需要宿主仿真器及其工具链，具体命令由宿主项目文档定义。
 
 该 crate 导出 C ABI `main` 并作为 `cdylib` 链入仿真器。测试配置需要同时考虑 Rust test
 harness 与导出入口的符号关系；新增单元测试时，应先确认 `cargo test` 的链接方式，并用
-最终 `Vibex_simple_system` 做至少一次集成验证。
+最终宿主 executable 做至少一次集成验证。
 
 建议按风险递增执行：
 
@@ -53,14 +51,14 @@ harness 与导出入口的符号关系；新增单元测试时，应先确认 `c
 3. 用一个短失败 ELF 做少量 generation iterations；
 4. 保存并恢复 checkpoint；
 5. 对同一 checkpoint 运行 analysis，检查排名与产物；
-6. 执行完整 bugset runner。
+6. 执行宿主项目定义的完整实验回归。
 
 ## 7.3 新增 coverage 类型
 
 新增 coverage 通常需要同时修改 C++ 和 Rust：
 
-1. 在 `../src/csrc/` 实现或注册 coverage collector；
-2. 在仿真运行结束时向 `CosimStats` 暴露稳定的名称、point 数量和计数数组；
+1. 在宿主侧实现或注册 coverage collector；
+2. 在仿真运行结束时通过 C ABI 暴露稳定的名称、point 数量和计数数组；
 3. 在 Rust `coverage.rs` 和 observer 层增加同名分派；
 4. 保证 C ABI 的指针生命周期和元素宽度一致；
 5. 更新根 CLI 的 supported values、README 和第 3 章；
@@ -90,7 +88,7 @@ state tracker 的扩展步骤为：
 - 定义 seed 选择、mutation 范围、corpus 淘汰和 reward 语义；
 - 为 testcase/state metadata 实现序列化；
 - 设计恢复时必须一致的 mode 参数，并决定是否纳入 checkpoint config；
-- 更新两个 README、第 2/4/6 章以及相关 runner 脚本。
+- 更新两个 README 和第 2/4/6 章；宿主 runner 由对应宿主项目自行同步。
 
 凡是需要随 checkpoint 恢复的 metadata，都必须支持 Serde，并按项目的 LibAFL
 `SerdeAny` 注册方式加入 state。仅存在进程内存中的自适应状态会在恢复后静默丢失。
@@ -143,8 +141,6 @@ CLI 或算法行为变化后，至少检查：
 
 - `README.md` 与 `README_CN.md`；
 - `docs/02-cli-and-workflows.md` 及对应算法章节；
-- `scripts/run_bugset_sbfl.sh`；
-- `scripts/run_bugset_psbfl.sh`；
-- `scripts/run_bugset_withw.sh`；
-- checkpoint 兼容性说明和已有实验脚本。
-
+- checkpoint 兼容性说明；
+- 宿主 ABI 契约；
+- 各宿主项目自己的构建与实验脚本。

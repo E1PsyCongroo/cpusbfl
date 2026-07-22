@@ -1,13 +1,14 @@
 # CPU SBFL 技术文档
 
-本目录描述 `dv/verilator/simple_system_sbfl/sbfl` 的当前实现。README 负责快速上手，
-这里侧重模块边界、数据模型、算法、不变量和扩展点。
+本目录描述 `cpusbfl` Rust 项目的当前实现。README 负责快速上手，这里侧重模块边界、
+数据模型、算法、不变量和扩展点。具体 DUT、仿真器构建和实验 runner 由宿主集成文档
+维护。
 
 ## 章节大纲
 
 | 章节 | 内容 | 适合读者 |
 | --- | --- | --- |
-| [01 总体架构](01-architecture.md) | Rust/C++/Verilator/Spike 的链接关系、运行时控制流和生命周期 | 首次接触项目的开发者 |
+| [01 总体架构](01-architecture.md) | Rust 库与宿主仿真器的边界、运行时控制流和生命周期 | 首次接触项目的开发者 |
 | [02 CLI 与工作流](02-cli-and-workflows.md) | 命令层级、参数约束、generation/resume/analysis/workload 流程 | 使用者、实验脚本作者 |
 | [03 数据与 FFI](03-data-and-ffi.md) | 覆盖率、状态序列、observer、C ABI 和内存布局约束 | 仿真器集成开发者 |
 | [04 生成策略](04-generation-strategies.md) | LibAFL corpus、Random、PSBFL、WitHW、调度和优先级更新 | 模糊测试算法开发者 |
@@ -28,7 +29,7 @@
 | --- | --- |
 | 顶层命令分派 | `src/app/`, `src/cli/` |
 | LibAFL 执行循环 | `src/fuzzer.rs` |
-| 仿真器桥接 | `src/harness.rs`, `../src/csrc/` |
+| 宿主仿真器桥接 | `src/harness.rs` |
 | 覆盖率和状态 | `src/coverage.rs`, `src/state_tracker.rs`, `src/observer/`, `src/feedback/` |
 | ELF 和指令处理 | `src/elf.rs`, `src/inst.rs`, `src/reduce/` |
 | 生成策略 | `src/mutator/`, `src/scheduler/`, `src/app/generation/strategy.rs` |
@@ -36,5 +37,5 @@
 | SBFL 和 RTL 映射 | `src/spectrum/`, `src/bugloc.rs`, `src/block/` |
 | Corpus checkpoint | `src/checkpoint.rs` |
 
-文档以当前源码为准。CLI 发生变更时，应同时更新两个 README、第 2 章以及仓库根目录
-下的 bugset runner 脚本。
+文档以当前源码为准。CLI 或算法发生变更时，应同步更新两个 README 和对应技术章节；
+宿主集成应在自己的项目中维护构建与 runner 文档。

@@ -138,7 +138,6 @@ where
     );
     let mut objective = ConstFeedback::new(false);
 
-    let is_new_session = resume.is_none();
     let (mut state, restored_session) = match resume {
         Some(session) => {
             let FuzzSession {
@@ -228,7 +227,7 @@ where
         }
     };
 
-    if is_new_session && let Some(output_dir) = output {
+    if let Some(output_dir) = output {
         store_testcase(
             &session.init_input,
             save_intermediate.then(|| &session.init_metadata),
@@ -256,7 +255,6 @@ where
     // Fuzzing Loop
     let mut stages = tuple_list!(StdMutationalStage::new(mutator));
 
-    let fuzzing_start_time = process_cpu_time_now()?;
     if let Some(interval) = checkpoint_interval {
         for _ in 0..max_iters {
             fuzzer.fuzz_one(&mut stages, &mut executor, &mut session.state, &mut mgr)?;
@@ -280,21 +278,6 @@ where
             .completed_iters
             .checked_add(max_iters)
             .ok_or("completed_iters overflow")?;
-    }
-    let fuzzing_end_time = process_cpu_time_now()?;
-    let fuzzing_elapsed = fuzzing_end_time
-        .checked_sub(fuzzing_start_time)
-        .unwrap_or_default();
-
-    log::info!("Fuzzing process CPU time = {fuzzing_elapsed:?}");
-
-    if let Some(output_dir) = output {
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(output_dir.join("fuzzing_time.txt"))?
-            .write_fmt(format_args!("{fuzzing_elapsed:?}"))?;
     }
 
     for cover_name in cover_names() {
