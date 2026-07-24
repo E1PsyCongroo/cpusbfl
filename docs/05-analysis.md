@@ -83,6 +83,39 @@ score_i = (1 - lambda) * (1 - fail_distance_i) + lambda * m_i
 
 score 相同时，依次优先：更小的失败距离、更大的多样性距离、更小的 corpus ID。
 
+### 选择结果的新颖性指标
+
+选择完成后，程序使用 RWMFC（Rarity-Weighted Marginal Fail Coverage）衡量通过用例对
+失败覆盖的新增贡献。设候选通过用例总数为 `N`，初始失败用例覆盖点 `j` 被其中 `n_j`
+个候选覆盖，则该点的稀有度权重为：
+
+$$
+w_j = 1 + ln((N + 1) / (n_j + 1))
+$$
+
+只统计初始失败用例覆盖且至少能被一个候选通过用例覆盖的点。按照最终选择顺序，用例
+`i` 的 marginal RWMFC 是它首次覆盖的点的权重之和，除以所有可达失败点的权重之和。
+多个 coverage observer 分别归一化后等权平均，避免点数较多的 coverage 类型支配结果。
+所有 marginal RWMFC 之和即最终选择集合的 RWMFC，取值范围为 `[0, 100]`。
+
+程序还报告 fail-point reachability，即至少被一个候选通过用例覆盖的失败点占全部失败点
+的比例。RWMFC 使用 coverage reduction 之前、执行选择时的二值覆盖计算，与
+`fail_distance` 的输入保持一致。
+
+设置 `--output DIR` 时，选择结果拆分写入三个 CSV：
+
+- `pass_selection_metrics.csv`：每个已选用例的 rank、corpus ID、distance、
+  marginal/cumulative RWMFC 和新增可达失败点数；
+- `pass_selection_summary.csv`：最终 RWMFC、失败点总数、可达失败点数、最终集合覆盖的
+  可达失败点数和 reachability；
+- `fail_point_difficulty.csv`：初始失败用例覆盖的每个点的 coverage 名称、索引、点名称、
+  候选 pass 覆盖次数/比例、是否可达及难度权重，按难度降序排列并给出 rank。
+
+`fail_point_difficulty.csv` 也保留没有候选 pass 能覆盖的点。`reachable` 表示该点是否
+被任意候选 pass 覆盖；`included_in_rwmfc` 表示该点是否被至少一个最终选中的 pass
+覆盖，即是否实际贡献到最终 RWMFC 的分子。不可达点的两个字段均为 `false`，其难度
+权重仍按上述公式计算，因此它们通常具有最大的难度值，但不会进入 RWMFC 的分母。
+
 ## 5.6 覆盖率约简
 
 SBFL 希望保留与失败或修复直接相关的覆盖差异。分析前可对覆盖率做两类约简。
@@ -146,4 +179,3 @@ block 排名对同一 block 去重，保留其最高可疑覆盖点所对应的�
 
 RTL 源文件、Verilator coverage 中的文件名/层次和构建时使用的源码必须一致，否则覆盖
 点可能无法映射。映射失败不会改变覆盖点本身的 SBFL 排名。
-

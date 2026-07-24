@@ -9,8 +9,8 @@ checkpoint 的逻辑布局为：
 
 ```text
 magic:   "SBFLCORPUS\0"
-digest:  16-byte MD5(payload)
-payload: JSON-serialized checkpoint
+digest:  16-byte MD5(uncompressed payload)
+payload: zstd-compressed postcard binary checkpoint
 ```
 
 当前 payload version 为 1，主要包含：
@@ -22,6 +22,10 @@ payload: JSON-serialized checkpoint
 - 累计 `completed_iters`；
 - 序列化的 LibAFL fuzzer state、corpus、testcase metadata；
 - WitHW 使用的自适应 priority metadata。
+
+保存和加载采用流式 postcard 编解码及 zstd level 3 压缩，不会在内存中构造完整的未压缩
+payload。当前 version 1 的二进制格式直接替代了早期 JSON 格式，旧 JSON checkpoint 不再
+兼容，需要使用新版本重新生成。
 
 MD5 在这里用于发现文件损坏，不提供安全认证。不要把来自不可信来源的 checkpoint 直接
 作为可信实验数据。
@@ -78,8 +82,11 @@ generation 或 analysis 使用 `--output DIR`。不同选项下可能出现以�
 | --- | --- | --- |
 | `init_case.elf` | generation 分析阶段 | 实际用于定位的初始失败 ELF |
 | `init_case.cover` / `.state` | `--save-intermediate` | 初始用例 observer 数据 |
-| `rank_<rank>_id_<id>_dst_<distance>.elf` | 选择到通过用例 | 按选择结果导出的 ELF |
+| `rank_<rank>_id_<id>.elf` | 选择到通过用例 | 按选择结果导出的 ELF |
 | 同名 `.cover` / `.state` | `--save-intermediate` | 对应通过用例 observer 数据 |
+| `pass_selection_metrics.csv` | 完成通过用例选择 | 每个 pass 的 rank、corpus ID、distance 和边际/累计 RWMFC |
+| `pass_selection_summary.csv` | 完成通过用例选择 | 最终 RWMFC、fail-point reachability 和集合覆盖统计 |
+| `fail_point_difficulty.csv` | 完成通过用例选择 | 每个 fail 覆盖点的候选 pass 覆盖频率和难度权重 |
 | `result.log` | SBFL 完成 | 覆盖点及可选 RTL block 排名 |
 | `blocks.json` | 设置 `--rtl` | 解析后的 RTL block 数据 |
 | `reducing_time.txt` | 启用输入约简 | 约简阶段 CPU 时间 |
@@ -89,8 +96,9 @@ generation 或 analysis 使用 `--output DIR`。不同选项下可能出现以�
 
 时间文件记录的是进程 CPU 时间，不等同于墙钟时间。
 
-部分文件（包括 `.cover`、`.state` 和 `result.log`）使用排他创建，已有同名文件时会失败；
-`blocks.json` 和时间文件则可覆盖。为保证实验可复现，建议每次使用新的空输出目录。
+部分文件（包括 `.cover`、`.state`、三个选择指标 CSV 和 `result.log`）使用排他创建，
+已有同名文件时会失败；`blocks.json` 和时间文件则可覆盖。为保证实验可复现，建议每次
+使用新的空输出目录。
 
 ## 6.6 ELF 约简中间文件
 
@@ -115,7 +123,6 @@ init_striped_suffix.elf
 
 - checkpoint 可放在输出目录之外，以免清理输出时误删恢复点；
 - 同时记录源码 revision、仿真器构建配置、完整 CLI 和随机 seed；
-- 不要手工编辑 JSON payload；读取和写入均通过当前版本程序完成；
+- 不要手工编辑二进制 payload；读取和写入均通过当前版本程序完成；
 - 归档前验证 checkpoint 能加载，并保留 `result.log` 和运行日志；
 - 比较实验时保持 coverage/state 名称及其顺序一致。
-

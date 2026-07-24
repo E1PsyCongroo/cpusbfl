@@ -19,7 +19,6 @@ mod spectrum;
 mod state_tracker;
 mod utils;
 
-
 #[unsafe(no_mangle)]
 fn main() {
     app::run().expect("sbfl")

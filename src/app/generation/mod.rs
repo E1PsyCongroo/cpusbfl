@@ -51,9 +51,7 @@ pub(super) fn run(
         checkpoint_callback,
     )?;
 
-    if let Some(path) = gen_args.save_corpus.as_ref() {
-        checkpoint::save(path, &saved_config, &session)?;
-    }
+    checkpoint_callback(&session)?;
 
     let generation_elapsed = process_cpu_time_now()?
         .checked_sub(generation_start_time)

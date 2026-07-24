@@ -23,7 +23,7 @@ fn write_elapsed(
     elapsed: std::time::Duration,
 ) -> AppResult {
     if let Some(output_dir) = output {
-    let output_dir = output_dir.as_ref().join("elapsed");
+        let output_dir = output_dir.as_ref().join("elapsed");
         std::fs::create_dir_all(&output_dir)?;
         std::fs::OpenOptions::new()
             .write(true)

@@ -41,7 +41,6 @@ fn collect_code_insts(input: &[u8], sections: &[lief::elf::Section]) -> Vec<Code
     insts
 }
 
-
 pub(super) fn build_nopped_input(
     input: &[u8],
     insts: &[CodeInst],

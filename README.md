@@ -181,6 +181,9 @@ Depending on the command and options, an output directory may contain:
 
 - `init_case.elf` and selected `rank_*.elf` inputs;
 - matching `.cover` and `.state` files with `--save-intermediate`;
+- `pass_selection_metrics.csv` with per-pass ranks, distances, and RWMFC;
+- `pass_selection_summary.csv` and `fail_point_difficulty.csv` with aggregate
+  selection metrics and per-fail-point difficulty;
 - `result.log` with coverage-point and optional RTL-block rankings;
 - `blocks.json` when RTL mapping is enabled;
 - phase timing files;

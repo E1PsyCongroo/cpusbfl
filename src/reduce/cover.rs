@@ -61,8 +61,7 @@ fn common_prefix_len(
         .iter()
         .zip(pass_pc_tracker.iter())
         .take_while(|(init_pc, pass_pc)| {
-            init_pc == pass_pc
-                && !mutated_pcs.contains(&pass_pc.value)
+            init_pc == pass_pc && !mutated_pcs.contains(&pass_pc.value)
         })
         .count()
 }

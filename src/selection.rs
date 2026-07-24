@@ -1,12 +1,13 @@
-use std::path::Path;
+use std::{io::Write, path::Path};
 
 use clap::ValueEnum;
 use libafl::prelude::*;
 use rand::seq::SliceRandom;
 
+use crate::coverage::cover_point_name;
 use crate::fuzzer::*;
-use crate::similarity::*;
 use crate::reduce::*;
+use crate::similarity::*;
 use crate::utils::*;
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -74,6 +75,353 @@ struct SelectionDecision {
     index: usize,
     min_pass_distance: f64,
     score: f64,
+}
+
+#[derive(Debug)]
+struct RwmfcGroup {
+    weights: Vec<f64>,
+    covered: Vec<bool>,
+    total_weight: f64,
+    total_fail_points: usize,
+    reachable_fail_points: usize,
+}
+
+fn fail_point_difficulty_weight(pass_count: usize, pass_cover_count: usize) -> f64 {
+    assert!(pass_cover_count <= pass_count);
+    1.0 + ((pass_count + 1) as f64 / (pass_cover_count + 1) as f64).ln()
+}
+
+impl RwmfcGroup {
+    fn new(fail_bits: &[bool], pass_cover_counts: &[usize], pass_count: usize) -> Self {
+        assert_eq!(fail_bits.len(), pass_cover_counts.len());
+
+        let mut weights = vec![0.0; fail_bits.len()];
+        let mut total_weight = 0.0;
+        let mut total_fail_points = 0;
+        let mut reachable_fail_points = 0;
+
+        for (index, (&fail_covered, &pass_cover_count)) in
+            fail_bits.iter().zip(pass_cover_counts).enumerate()
+        {
+            if !fail_covered {
+                continue;
+            }
+
+            total_fail_points += 1;
+            if pass_cover_count == 0 {
+                continue;
+            }
+
+            reachable_fail_points += 1;
+            let weight = fail_point_difficulty_weight(pass_count, pass_cover_count);
+            weights[index] = weight;
+            total_weight += weight;
+        }
+
+        Self {
+            covered: vec![false; fail_bits.len()],
+            weights,
+            total_weight,
+            total_fail_points,
+            reachable_fail_points,
+        }
+    }
+
+    fn add_selected_case(&mut self, pass_bits: &[bool]) -> (f64, usize) {
+        assert_eq!(self.weights.len(), pass_bits.len());
+
+        let mut new_weight = 0.0;
+        let mut new_points = 0;
+        for (index, &pass_covered) in pass_bits.iter().enumerate() {
+            if pass_covered && self.weights[index] > 0.0 && !self.covered[index] {
+                self.covered[index] = true;
+                new_weight += self.weights[index];
+                new_points += 1;
+            }
+        }
+
+        let new_fraction = if self.total_weight > 0.0 {
+            new_weight / self.total_weight
+        } else {
+            0.0
+        };
+        (new_fraction, new_points)
+    }
+
+    fn covered_reachable_points(&self) -> usize {
+        self.covered
+            .iter()
+            .zip(&self.weights)
+            .filter(|(covered, weight)| **covered && **weight > 0.0)
+            .count()
+    }
+}
+
+#[derive(Debug)]
+struct PassSelectionMetric {
+    rank: usize,
+    corpus_id: usize,
+    distance: f64,
+    marginal_rwmfc_percent: f64,
+    cumulative_rwmfc_percent: f64,
+    new_reachable_fail_points: usize,
+}
+
+#[derive(Debug)]
+struct FailPointDifficulty {
+    cover_name: String,
+    point_index: usize,
+    pass_cover_count: usize,
+    candidate_pass_count: usize,
+    difficulty_weight: f64,
+    covered_by_selected_pass: bool,
+}
+
+impl FailPointDifficulty {
+    fn reachable(&self) -> bool {
+        self.pass_cover_count > 0
+    }
+}
+
+#[derive(Debug)]
+struct PassSelectionReport {
+    cases: Vec<PassSelectionMetric>,
+    fail_points: Vec<FailPointDifficulty>,
+    final_rwmfc_percent: f64,
+    total_fail_points: usize,
+    reachable_fail_points: usize,
+    selected_covered_reachable_fail_points: usize,
+    reachability_percent: f64,
+}
+
+fn calculate_pass_selection_report(
+    init_metadata: &CaseMetadata,
+    passed_cases: &[PassedCase],
+    decisions: &[SelectionDecision],
+) -> PassSelectionReport {
+    let mut cover_names = init_metadata.covers.names();
+    cover_names.sort();
+
+    let mut groups = Vec::with_capacity(cover_names.len());
+    let mut fail_points = Vec::new();
+    for cover_name in &cover_names {
+        let fail_bits = init_metadata.covers.covered_bits(cover_name);
+        let mut pass_cover_counts = vec![0; fail_bits.len()];
+        let mut selected_pass_covered = vec![false; fail_bits.len()];
+
+        for case in passed_cases {
+            let pass_bits = case.metadata.covers.covered_bits(cover_name);
+            assert_eq!(fail_bits.len(), pass_bits.len());
+            for (index, (&fail_covered, pass_covered)) in
+                fail_bits.iter().zip(pass_bits).enumerate()
+            {
+                if fail_covered && pass_covered {
+                    pass_cover_counts[index] += 1;
+                }
+            }
+        }
+        for decision in decisions {
+            let pass_bits = passed_cases[decision.index]
+                .metadata
+                .covers
+                .covered_bits(cover_name);
+            assert_eq!(fail_bits.len(), pass_bits.len());
+            for (selected_covered, pass_covered) in selected_pass_covered.iter_mut().zip(pass_bits)
+            {
+                *selected_covered |= pass_covered;
+            }
+        }
+
+        for (point_index, (&fail_covered, &pass_cover_count)) in
+            fail_bits.iter().zip(&pass_cover_counts).enumerate()
+        {
+            if fail_covered {
+                fail_points.push(FailPointDifficulty {
+                    cover_name: cover_name.clone(),
+                    point_index,
+                    pass_cover_count,
+                    candidate_pass_count: passed_cases.len(),
+                    difficulty_weight: fail_point_difficulty_weight(
+                        passed_cases.len(),
+                        pass_cover_count,
+                    ),
+                    covered_by_selected_pass: selected_pass_covered[point_index],
+                });
+            }
+        }
+
+        groups.push(RwmfcGroup::new(
+            &fail_bits,
+            &pass_cover_counts,
+            passed_cases.len(),
+        ));
+    }
+
+    let scorable_group_count = groups
+        .iter()
+        .filter(|group| group.total_weight > 0.0)
+        .count();
+    let total_fail_points = groups.iter().map(|group| group.total_fail_points).sum();
+    let reachable_fail_points = groups.iter().map(|group| group.reachable_fail_points).sum();
+    let reachability_percent = if total_fail_points > 0 {
+        100.0 * reachable_fail_points as f64 / total_fail_points as f64
+    } else {
+        0.0
+    };
+
+    let mut cumulative_rwmfc_percent = 0.0;
+    let mut cases = Vec::with_capacity(decisions.len());
+    for (rank, decision) in decisions.iter().enumerate() {
+        let case = &passed_cases[decision.index];
+        let mut marginal_group_fraction_sum = 0.0;
+        let mut new_reachable_fail_points = 0;
+
+        for (cover_name, group) in cover_names.iter().zip(&mut groups) {
+            let pass_bits = case.metadata.covers.covered_bits(cover_name);
+            let (new_fraction, new_points) = group.add_selected_case(&pass_bits);
+            if group.total_weight > 0.0 {
+                marginal_group_fraction_sum += new_fraction;
+            }
+            new_reachable_fail_points += new_points;
+        }
+
+        let marginal_rwmfc_percent = if scorable_group_count > 0 {
+            100.0 * marginal_group_fraction_sum / scorable_group_count as f64
+        } else {
+            0.0
+        };
+        cumulative_rwmfc_percent += marginal_rwmfc_percent;
+        cases.push(PassSelectionMetric {
+            rank: rank + 1,
+            corpus_id: case.id,
+            distance: case.fail_distance,
+            marginal_rwmfc_percent,
+            cumulative_rwmfc_percent,
+            new_reachable_fail_points,
+        });
+    }
+
+    PassSelectionReport {
+        cases,
+        fail_points,
+        final_rwmfc_percent: cumulative_rwmfc_percent.min(100.0),
+        total_fail_points,
+        reachable_fail_points,
+        selected_covered_reachable_fail_points: groups
+            .iter()
+            .map(RwmfcGroup::covered_reachable_points)
+            .sum(),
+        reachability_percent,
+    }
+}
+
+fn csv_field(value: &str) -> String {
+    if value.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value.to_string()
+    }
+}
+
+fn write_pass_selection_metrics(
+    output_dir: impl AsRef<Path>,
+    report: &PassSelectionReport,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut output = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(output_dir.as_ref().join("pass_selection_metrics.csv"))?;
+
+    writeln!(
+        output,
+        "rank,corpus_id,distance,marginal_rwmfc_percent,cumulative_rwmfc_percent,new_reachable_fail_points"
+    )?;
+    for case in &report.cases {
+        writeln!(
+            output,
+            "{},{},{:.12},{:.6},{:.6},{}",
+            case.rank,
+            case.corpus_id,
+            case.distance,
+            case.marginal_rwmfc_percent,
+            case.cumulative_rwmfc_percent,
+            case.new_reachable_fail_points,
+        )?;
+    }
+
+    Ok(())
+}
+
+fn write_pass_selection_summary(
+    output_dir: impl AsRef<Path>,
+    report: &PassSelectionReport,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut output = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(output_dir.as_ref().join("pass_selection_summary.csv"))?;
+
+    writeln!(
+        output,
+        "final_rwmfc_percent,total_fail_points,reachable_fail_points,selected_covered_reachable_fail_points,reachability_percent"
+    )?;
+    writeln!(
+        output,
+        "{:.6},{},{},{},{:.6}",
+        report.final_rwmfc_percent,
+        report.total_fail_points,
+        report.reachable_fail_points,
+        report.selected_covered_reachable_fail_points,
+        report.reachability_percent,
+    )?;
+
+    Ok(())
+}
+
+fn write_fail_point_difficulties(
+    output_dir: impl AsRef<Path>,
+    report: &PassSelectionReport,
+    mut point_name: impl FnMut(&str, usize) -> String,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut output = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(output_dir.as_ref().join("fail_point_difficulty.csv"))?;
+
+    writeln!(
+        output,
+        "difficulty_rank,coverage_name,point_index,point_name,pass_cover_count,candidate_pass_count,pass_cover_rate_percent,reachable,difficulty_weight,included_in_rwmfc"
+    )?;
+    let mut ranked_points = report.fail_points.iter().collect::<Vec<_>>();
+    ranked_points.sort_by(|a, b| {
+        b.difficulty_weight
+            .total_cmp(&a.difficulty_weight)
+            .then_with(|| a.cover_name.cmp(&b.cover_name))
+            .then_with(|| a.point_index.cmp(&b.point_index))
+    });
+    for (rank, point) in ranked_points.into_iter().enumerate() {
+        let pass_cover_rate_percent = if point.candidate_pass_count > 0 {
+            100.0 * point.pass_cover_count as f64 / point.candidate_pass_count as f64
+        } else {
+            0.0
+        };
+        writeln!(
+            output,
+            "{},{},{},{},{},{},{:.6},{},{:.12},{}",
+            rank + 1,
+            csv_field(&point.cover_name),
+            point.point_index,
+            csv_field(&point_name(&point.cover_name, point.point_index)),
+            point.pass_cover_count,
+            point.candidate_pass_count,
+            pass_cover_rate_percent,
+            point.reachable(),
+            point.difficulty_weight,
+            point.covered_by_selected_pass,
+        )?;
+    }
+
+    Ok(())
 }
 
 fn is_better_diverse_candidate(
@@ -396,6 +744,33 @@ pub(crate) fn emit_top_passed_testcases(
         selection
     );
 
+    let pass_selection_report =
+        calculate_pass_selection_report(&init_metadata, &passed_cases, &decisions);
+    log::info!(
+        "Selected pass RWMFC={:.6}%, reachability={:.6}% ({}/{} fail points reachable), selected_covered_reachable_fail_points={}",
+        pass_selection_report.final_rwmfc_percent,
+        pass_selection_report.reachability_percent,
+        pass_selection_report.reachable_fail_points,
+        pass_selection_report.total_fail_points,
+        pass_selection_report.selected_covered_reachable_fail_points,
+    );
+    for case in &pass_selection_report.cases {
+        log::info!(
+            "Pass selection metric: rank={}, corpus_id={}, distance={:.6}, marginal_rwmfc={:.6}%, cumulative_rwmfc={:.6}%, new_reachable_fail_points={}",
+            case.rank,
+            case.corpus_id,
+            case.distance,
+            case.marginal_rwmfc_percent,
+            case.cumulative_rwmfc_percent,
+            case.new_reachable_fail_points,
+        );
+    }
+    if let Some(output_dir) = &output {
+        write_pass_selection_metrics(output_dir, &pass_selection_report)?;
+        write_pass_selection_summary(output_dir, &pass_selection_report)?;
+        write_fail_point_difficulties(output_dir, &pass_selection_report, cover_point_name)?;
+    }
+
     let mut passed_cases = passed_cases.into_iter().map(Some).collect::<Vec<_>>();
     let mut top_passed_cases = decisions
         .into_iter()
@@ -437,12 +812,7 @@ pub(crate) fn emit_top_passed_testcases(
         }
 
         if let Some(output_dir) = &output {
-            let filename = format!(
-                "rank_{:04}_id_{}_dst_{:.6}",
-                rank + 1,
-                case.id,
-                case.fail_distance
-            );
+            let filename = format!("rank_{:04}_id_{}", rank + 1, case.id,);
             store_testcase(
                 &case.input,
                 save_intermediate.then(|| &case.metadata),

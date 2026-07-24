@@ -24,7 +24,11 @@ pub(crate) struct StateTrackersObserver {
 }
 
 impl StateTrackersObserver {
-    pub(crate) unsafe fn from_raw(name: &'static str, trackers: &StateTrackers, window_size: usize) -> Self {
+    pub(crate) unsafe fn from_raw(
+        name: &'static str,
+        trackers: &StateTrackers,
+        window_size: usize,
+    ) -> Self {
         Self {
             name: Cow::Borrowed(name),
             trackers: unsafe { OwnedPtr::from_raw(trackers) },

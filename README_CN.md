@@ -172,6 +172,8 @@ metric、排名数量和 RTL 映射可以改变。
 
 - `init_case.elf` 和选中的 `rank_*.elf`；
 - 使用 `--save-intermediate` 时生成的 `.cover` 和 `.state`；
+- pass 排名与 RWMFC 明细 `pass_selection_metrics.csv`；
+- 集合汇总 `pass_selection_summary.csv` 和逐 fail 点难度 `fail_point_difficulty.csv`；
 - 覆盖点和可选 RTL block 排名 `result.log`；
 - 启用 RTL 映射时生成的 `blocks.json`；
 - 各阶段计时文件；
