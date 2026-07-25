@@ -110,9 +110,6 @@ where
     ) -> Result<M, Box<dyn std::error::Error>>,
     CF: FnMut(&FuzzSession) -> Result<(), Box<dyn std::error::Error>>,
 {
-    if max_iters == 0 {
-        return Err("max_iters must be greater than 0".into());
-    }
     if checkpoint_interval == Some(0) {
         return Err("checkpoint_interval must be greater than 0".into());
     }
@@ -244,40 +241,42 @@ where
         .expect("SIM_ARGS poisoned mutex")
         .extend(vec!["-I".to_string(), max_inst.to_string()].into_iter());
 
-    // Build mutators after evaluating the initial input, since the guided
-    // mutators need its PC trace.
-    let mutator = mutator_factory(
-        &session.init_input,
-        &session.init_metadata,
-        &mut session.state,
-    )?;
+    if max_iters > 0 {
+        // Build mutators after evaluating the initial input, since the guided
+        // mutators need its PC trace.
+        let mutator = mutator_factory(
+            &session.init_input,
+            &session.init_metadata,
+            &mut session.state,
+        )?;
 
-    // Fuzzing Loop
-    let mut stages = tuple_list!(StdMutationalStage::new(mutator));
+        // Fuzzing Loop
+        let mut stages = tuple_list!(StdMutationalStage::new(mutator));
 
-    if let Some(interval) = checkpoint_interval {
-        for _ in 0..max_iters {
-            fuzzer.fuzz_one(&mut stages, &mut executor, &mut session.state, &mut mgr)?;
+        if let Some(interval) = checkpoint_interval {
+            for _ in 0..max_iters {
+                fuzzer.fuzz_one(&mut stages, &mut executor, &mut session.state, &mut mgr)?;
+                session.completed_iters = session
+                    .completed_iters
+                    .checked_add(1)
+                    .ok_or("completed_iters overflow")?;
+                if session.completed_iters % interval == 0 {
+                    checkpoint_callback(&session)?;
+                }
+            }
+        } else {
+            fuzzer.fuzz_loop_for(
+                &mut stages,
+                &mut executor,
+                &mut session.state,
+                &mut mgr,
+                max_iters,
+            )?;
             session.completed_iters = session
                 .completed_iters
-                .checked_add(1)
+                .checked_add(max_iters)
                 .ok_or("completed_iters overflow")?;
-            if session.completed_iters % interval == 0 {
-                checkpoint_callback(&session)?;
-            }
         }
-    } else {
-        fuzzer.fuzz_loop_for(
-            &mut stages,
-            &mut executor,
-            &mut session.state,
-            &mut mgr,
-            max_iters,
-        )?;
-        session.completed_iters = session
-            .completed_iters
-            .checked_add(max_iters)
-            .ok_or("completed_iters overflow")?;
     }
 
     for cover_name in cover_names() {

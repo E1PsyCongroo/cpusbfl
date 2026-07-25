@@ -22,7 +22,12 @@ pub(super) fn run(
         state: state_names.clone(),
         tracker_window_size: gen_args.common_args.tracker_window_size,
     };
-    harness::set_sim_env(coverage_names, state_names, emu_args);
+    harness::set_sim_env(
+        coverage_names,
+        state_names,
+        emu_args,
+        gen_args.common_args.save_intermediate,
+    );
 
     ensure_output_dir(gen_args.output.as_deref())?;
 

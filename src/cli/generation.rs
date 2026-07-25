@@ -31,7 +31,7 @@ pub(crate) struct GenerationArgs {
     #[arg(long, value_name = "PATH")]
     pub(crate) output: Option<PathBuf>,
 
-    #[arg(default_value_t = 100, value_parser = parse_positive_u64, long)]
+    #[arg(default_value_t = 100, long)]
     pub(crate) max_iters: u64,
     #[arg(default_value_t = 10, value_parser = parse_positive_u64, long)]
     pub(crate) max_run_timeout: u64,

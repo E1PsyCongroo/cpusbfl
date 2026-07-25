@@ -8,7 +8,7 @@ pub(super) fn run(
     extra_args: Vec<String>,
 ) -> AppResult {
     let (workloads, emu_args) = split_extra_args(extra_args);
-    harness::set_sim_env(coverage_names, state_names, emu_args);
+    harness::set_sim_env(coverage_names, state_names, emu_args, true);
 
     if workloads.is_empty() {
         return Ok(());

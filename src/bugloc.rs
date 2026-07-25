@@ -43,6 +43,7 @@ pub(crate) fn report_result(
                 .enumerate()
                 .map(move |(idx, sus)| (cover_name.clone(), idx, sus))
         })
+        .filter(|(_, _, sus)| *sus > 0.0)
         .collect::<Vec<(String, usize, f64)>>();
     ranked_points.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap());
 

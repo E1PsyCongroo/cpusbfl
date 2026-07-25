@@ -69,11 +69,11 @@ generation := generation [GENERATION OPTIONS] <psbfl|random|wit-hw> [MODE OPTION
 | `--checkpoint-interval N` | 无 | 每 N 个累计 iteration 保存；要求 save-corpus，N > 0 |
 | `--gen-only` | false | 只生成，不执行 selection 和 SBFL |
 | `--output PATH` | 无 | 输出 ELF、日志和耗时文件的目录 |
-| `--max-iters N` | `100` | 本次运行的 iteration 数，N > 0 |
+| `--max-iters N` | `100` | 本次运行的 iteration 数，N >= 0；0 表示只处理初始/已恢复 corpus |
 | `--max-run-timeout N` | `10` | 单个输入的超时秒数，N > 0 |
 | `--tracker-window-size N` | `20` | observer 保存的 trace 尾部长度，N > 0 |
 | `--cover-distance-weight W` | `0.5` | coverage/state 距离权重，范围 `[0,1]` |
-| `--save-intermediate` | false | 为输出 ELF 同时保存 `.cover` 和 `.state` |
+| `--save-intermediate` | false | 为输出 ELF 同时保存 `.cover` 和 `.state`；未启用时丢弃 fuzz 仿真的 stdout/stderr |
 
 如果 `--input` 指向目录，加载器只选取按路径排序后的第一个普通文件；它不是初始
 seed corpus 的批量导入接口。
@@ -84,7 +84,7 @@ seed corpus 的批量导入接口。
 
 | 参数 | 缺省值 | 说明 |
 | --- | --- | --- |
-| `--top-pass N` | `10` | 最多选取的通过用例数 |
+| `--top-pass N` | `10` | 最多选取的通过用例数，N >= 0；0 表示不选取通过用例 |
 | `--selection` | `sort` | `random`、`sort` 或 `diverse` |
 | `--selection-diversity-weight W` | `0.4` | Diverse 中多样性项权重 |
 | `--selection-pool-factor N` | `3` | Diverse 候选池相对 top-pass 的倍数 |

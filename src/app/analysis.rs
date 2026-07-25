@@ -29,7 +29,12 @@ pub(super) fn run(
     };
     let (saved_config, session) = checkpoint::load(&input)?;
     checkpoint::validate_config(&checkpoint_config, &saved_config)?;
-    harness::set_sim_env(coverage_names, state_names, emu_args);
+    harness::set_sim_env(
+        coverage_names,
+        state_names,
+        emu_args,
+        common_args.save_intermediate,
+    );
 
     ensure_output_dir(output.as_ref())?;
 

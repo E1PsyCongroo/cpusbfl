@@ -1,7 +1,12 @@
 use std::{
     ffi::{CString, c_char, c_int, c_uint, c_void},
+    fs::File,
     io::{self, Write},
-    sync::{Mutex, OnceLock},
+    os::fd::AsRawFd,
+    sync::{
+        Mutex, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use libafl::prelude::*;
@@ -9,7 +14,6 @@ use tempfile::Builder;
 
 use crate::coverage::*;
 use crate::state_tracker::*;
-use crate::utils::store_testcase;
 
 unsafe extern "C" {
     pub fn sim_main(argc: c_int, argv: *const *const c_char) -> c_int;
@@ -36,6 +40,73 @@ unsafe extern "C" {
 }
 
 pub(crate) static SIM_ARGS: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+static SAVE_INTERMEDIATE: AtomicBool = AtomicBool::new(false);
+
+struct SimOutputSilencer {
+    saved_stdout: c_int,
+    saved_stderr: c_int,
+}
+
+impl SimOutputSilencer {
+    fn new() -> io::Result<Self> {
+        flush_process_output();
+
+        let null = File::options().write(true).open("/dev/null")?;
+        let saved_stdout = unsafe { libc::dup(libc::STDOUT_FILENO) };
+        if saved_stdout < 0 {
+            return Err(io::Error::last_os_error());
+        }
+
+        let saved_stderr = unsafe { libc::dup(libc::STDERR_FILENO) };
+        if saved_stderr < 0 {
+            unsafe {
+                libc::close(saved_stdout);
+            }
+            return Err(io::Error::last_os_error());
+        }
+
+        if unsafe { libc::dup2(null.as_raw_fd(), libc::STDOUT_FILENO) } < 0 {
+            unsafe {
+                libc::close(saved_stdout);
+                libc::close(saved_stderr);
+            }
+            return Err(io::Error::last_os_error());
+        }
+        if unsafe { libc::dup2(null.as_raw_fd(), libc::STDERR_FILENO) } < 0 {
+            unsafe {
+                libc::dup2(saved_stdout, libc::STDOUT_FILENO);
+                libc::close(saved_stdout);
+                libc::close(saved_stderr);
+            }
+            return Err(io::Error::last_os_error());
+        }
+
+        Ok(Self {
+            saved_stdout,
+            saved_stderr,
+        })
+    }
+}
+
+impl Drop for SimOutputSilencer {
+    fn drop(&mut self) {
+        flush_process_output();
+        unsafe {
+            libc::dup2(self.saved_stdout, libc::STDOUT_FILENO);
+            libc::dup2(self.saved_stderr, libc::STDERR_FILENO);
+            libc::close(self.saved_stdout);
+            libc::close(self.saved_stderr);
+        }
+    }
+}
+
+fn flush_process_output() {
+    let _ = io::stdout().flush();
+    let _ = io::stderr().flush();
+    unsafe {
+        libc::fflush(std::ptr::null_mut());
+    }
+}
 
 fn sim_run(workload: &str, update_cover: bool, update_tracker: bool) -> i32 {
     // prepare the simulation arguments in Vec<String> format
@@ -138,21 +209,20 @@ pub(crate) fn sim_with_max_inst<T>(max_inst: usize, f: impl FnOnce() -> T) -> T 
     ret
 }
 
-pub static mut SAVE_ERRORS: bool = false;
 pub(crate) fn fuzz_harness(input: &BytesInput) -> ExitKind {
-    let ret = sim_run_from_memory(input, true, true);
+    let ret = if SAVE_INTERMEDIATE.load(Ordering::Relaxed) {
+        sim_run_from_memory(input, true, true)
+    } else {
+        let _silencer =
+            SimOutputSilencer::new().expect("failed to redirect simulation output to /dev/null");
+        sim_run_from_memory(input, true, true)
+    };
 
     // get coverage
     for cover_name in cover_names() {
         cover_display(&cover_name);
     }
     io::stdout().flush().unwrap();
-
-    // save the target testcase into disk
-    let do_save = unsafe { SAVE_ERRORS && ret != 0 };
-    if do_save {
-        store_testcase(input, None, "errors", None).unwrap();
-    }
 
     if ret != 0 {
         ExitKind::Crash
@@ -161,8 +231,14 @@ pub(crate) fn fuzz_harness(input: &BytesInput) -> ExitKind {
     }
 }
 
-pub(crate) fn set_sim_env(cover_names: String, state_names: String, emu_args: Vec<String>) {
+pub(crate) fn set_sim_env(
+    cover_names: String,
+    state_names: String,
+    emu_args: Vec<String>,
+    save_intermediate: bool,
+) {
     let _ = SIM_ARGS.set(Mutex::new(emu_args));
+    SAVE_INTERMEDIATE.store(save_intermediate, Ordering::Relaxed);
 
     cover_init(
         cover_names
