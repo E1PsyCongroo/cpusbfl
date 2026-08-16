@@ -6,9 +6,9 @@
 DUT/参考模型差异的可执行输入开始，通过修改可执行指令收集通过反例，再根据频谱可疑度
 对覆盖点或解析后的 RTL block 排序。
 
-crate 编译为 `libcpusbfl.so`，不能通过 `cargo run` 独立运行。宿主仿真器需要链接该
-动态库，实现 `src/harness.rs` 声明的 C ABI，并提供覆盖率与体系结构状态数据。具体
-DUT、仿真器构建系统和实验 runner 属于宿主集成，不属于本项目文档。
+crate 的 SBFL 主功能编译为 `libcpusbfl.so`，不能通过 `cargo run` 独立运行。宿主仿真器
+需要链接该动态库，实现 `src/harness.rs` 声明的 C ABI，并提供覆盖率与体系结构状态数据。
+项目另带一个可独立运行的 RTL 覆盖率信号筛选工具，见下文“覆盖率信号筛选”。
 
 ## 主要能力
 
@@ -39,6 +39,7 @@ src/
 ├── similarity.rs          # coverage/state 距离
 ├── spectrum/              # 频谱矩阵和指标
 ├── block/                 # SystemVerilog block 解析
+├── bin/                   # 独立 RTL 分析工具
 ├── checkpoint.rs          # checkpoint 序列化与校验
 └── reduce/                # 可执行输入和覆盖率约简
 ```
@@ -59,6 +60,32 @@ target/release/libcpusbfl.so
 
 构建动态库不会产生可直接运行的仿真器。宿主必须链接该动态库，并实现
 [FFI 章节](docs/03-data-and-ffi.md)描述的仿真、覆盖率和状态回调。
+
+## 覆盖率信号筛选
+
+`coverage-signal-filter` 使用 `sv-parser` 分析 RTL 的数据依赖、`if`/`case` 控制依赖和
+子模块端口依赖。它输出两类无需记录 toggle coverage 的信号：
+
+- 所有 module input；
+- 不在任何 module output 反向依赖锥中的其他已声明信号。
+
+从仓库根目录运行：
+
+```bash
+cargo run -p cpusbfl --bin coverage-signal-filter -- \
+  --rtl-path rtl \
+  --include-path rtl \
+  --include-path vendor/lowrisc_ip/ip/prim/rtl \
+  --include-path vendor/lowrisc_ip/dv/sv/dv_utils \
+  --top-module ibex_core \
+  --top-scope TOP.ibex_core \
+  --output /tmp/coverage-off-signals.json
+```
+
+`--rtl-path` 可以是单个 `.sv`/`.v` 文件或递归扫描的目录；`--include-path` 可以重复。
+若省略 `--output`，JSON 会写到 stdout。报告按 module 给出源文件、所有可达层次 scope、
+信号声明行和原因（`module_input` 或 `not_related_to_module_output`）。未提供源码的子模块
+按黑盒保守处理并写入 `warnings`，不会据此误删父模块 output 的潜在依赖。
 
 ## 宿主接口
 

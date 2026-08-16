@@ -177,5 +177,12 @@ SBFL 希望保留与失败或修复直接相关的覆盖差异。分析前可对
 覆盖点通过文件、层次和行号映射到 block。`blocks.json` 保存解析结果；`result.log` 中的
 block 排名对同一 block 去重，保留其最高可疑覆盖点所对应的得分。
 
+`toggle` 覆盖点使用 coverage 元数据 `comment` 中的信号名做特殊处理：通过
+`sv-parser` 收集同一 module scope 内修改该信号的连续赋值、阻塞/非阻塞赋值、复合赋值
+和声明初始化语句，再以这些赋值语句的行号映射 block。位选择会归一到所属信号，整体
+结构体与字段赋值也会互相匹配；匹配到的语句写入 `result.log` 的
+`Related assignment statements of toggle cover points` 段。若未找到赋值语句，则回退到
+覆盖点原始行号的映射方式。
+
 RTL 源文件、Verilator coverage 中的文件名/层次和构建时使用的源码必须一致，否则覆盖
 点可能无法映射。映射失败不会改变覆盖点本身的 SBFL 排名。

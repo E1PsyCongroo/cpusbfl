@@ -1,16 +1,18 @@
 use std::{
     collections::{HashMap, VecDeque},
-    path::{Path, PathBuf},
+    path::Path,
     sync::Arc,
 };
 
 use serde::Serialize;
 use sv_parser::{Define, NodeEvent, RefNode, SyntaxTree, parse_sv, unwrap_node};
 
-use super::{Block, DataFlowBlock, parse_module_blocks};
+use super::{
+    Block, DataFlowBlock, SignalAssignment, parse_module_blocks, parse_signal_assignments,
+};
 
 pub(crate) struct BlockManager {
-    blocks_by_scope: HashMap<String, (Vec<DataFlowBlock>, Arc<SyntaxTree>)>,
+    blocks_by_scope: HashMap<String, (Vec<DataFlowBlock>, Vec<SignalAssignment>, Arc<SyntaxTree>)>,
 }
 
 impl BlockManager {
@@ -52,8 +54,10 @@ impl BlockManager {
             })
             .clone();
 
-        let mut blocks_by_scope: HashMap<String, (Vec<DataFlowBlock>, Arc<SyntaxTree>)> =
-            HashMap::new();
+        let mut blocks_by_scope: HashMap<
+            String,
+            (Vec<DataFlowBlock>, Vec<SignalAssignment>, Arc<SyntaxTree>),
+        > = HashMap::new();
         let mut queue: VecDeque<(String, Arc<SyntaxTree>)> = VecDeque::new();
         queue.push_back((top_scope.to_string(), top_tree));
 
@@ -61,7 +65,8 @@ impl BlockManager {
             let mname = get_module_name(&cur_tree).unwrap_or_else(|| "unknown".to_string());
             let code = module_code_map.get(&mname).cloned().unwrap_or_default();
             let blocks = parse_module_blocks(&cur_tree, &cur_scope, &code);
-            blocks_by_scope.insert(cur_scope.clone(), (blocks, cur_tree.clone()));
+            let assignments = parse_signal_assignments(&cur_tree, &code);
+            blocks_by_scope.insert(cur_scope.clone(), (blocks, assignments, cur_tree.clone()));
 
             // Find submodule instantiations
             let mut scope_prefix: Vec<String> = vec![];
@@ -101,8 +106,24 @@ impl BlockManager {
     pub(crate) fn get_all_blocks(&self) -> Vec<&DataFlowBlock> {
         self.blocks_by_scope
             .values()
-            .flat_map(|(blocks, _)| blocks.iter())
+            .flat_map(|(blocks, _, _)| blocks.iter())
             .collect()
+    }
+
+    pub(crate) fn get_signal_assignments(
+        &self,
+        scope: &str,
+        signal: &str,
+    ) -> Vec<&SignalAssignment> {
+        self.blocks_by_scope
+            .get(scope)
+            .map(|(_, assignments, _)| {
+                assignments
+                    .iter()
+                    .filter(|assignment| assignment.modifies(signal))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     pub(crate) fn dump_blocks_distribution(
@@ -112,7 +133,7 @@ impl BlockManager {
         let data: Vec<_> = self
             .blocks_by_scope
             .iter()
-            .flat_map(|(scope, (blocks, _))| {
+            .flat_map(|(scope, (blocks, _, _))| {
                 blocks.iter().map(move |block| {
                     serde_json::json!({
                         "bid": block.bid(),

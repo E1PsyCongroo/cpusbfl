@@ -1,7 +1,9 @@
 mod dfb;
 mod mgr;
 
-pub(crate) use dfb::{DataFlowBlock, parse_module_blocks};
+pub(crate) use dfb::{
+    DataFlowBlock, SignalAssignment, parse_module_blocks, parse_signal_assignments,
+};
 pub(crate) use mgr::BlockManager;
 
 /// Block type classification

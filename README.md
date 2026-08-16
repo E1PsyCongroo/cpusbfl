@@ -8,11 +8,11 @@ a DUT/reference-model mismatch, it mutates executable instructions, collects
 passing counterexamples, and ranks coverage points or parsed RTL blocks by
 suspiciousness.
 
-The crate builds as `libcpusbfl.so`. It is not a standalone `cargo run`
-application: a host simulator must link the library, provide the C ABI declared
-by `src/harness.rs`, and expose coverage and architectural-state observations.
-Host-specific build systems, simulator setup, and experiment runners belong to
-the host integration rather than this project.
+The main SBFL crate builds as `libcpusbfl.so`. It is not a standalone `cargo
+run` application: a host simulator must link the library, provide the C ABI
+declared by `src/harness.rs`, and expose coverage and architectural-state
+observations. The project also includes a standalone RTL coverage signal filter
+described below.
 
 ## Features
 
@@ -43,6 +43,7 @@ src/
 ├── similarity.rs          # coverage/state distance functions
 ├── spectrum/              # spectrum matrices and metrics
 ├── block/                 # SystemVerilog block parsing
+├── bin/                   # standalone RTL analysis tools
 ├── checkpoint.rs          # checkpoint serialization and validation
 └── reduce/                # executable and coverage reduction
 ```
@@ -65,6 +66,36 @@ target/release/libcpusbfl.so
 Building the shared library does not create a runnable simulator. The host must
 link it and implement the simulator, coverage, and state callbacks described in
 [the FFI chapter](docs/03-data-and-ffi.md).
+
+## Coverage Signal Filter
+
+`coverage-signal-filter` uses `sv-parser` to analyze RTL data dependencies,
+`if`/`case` control dependencies, and child-module port dependencies. It reports
+two classes of signals whose toggle coverage need not be recorded:
+
+- every module input;
+- every other declared signal outside the backward dependency cone of all
+  module outputs.
+
+Run it from the repository root:
+
+```bash
+cargo run -p cpusbfl --bin coverage-signal-filter -- \
+  --rtl-path rtl \
+  --include-path rtl \
+  --include-path vendor/lowrisc_ip/ip/prim/rtl \
+  --include-path vendor/lowrisc_ip/dv/sv/dv_utils \
+  --top-module ibex_core \
+  --top-scope TOP.ibex_core \
+  --output /tmp/coverage-off-signals.json
+```
+
+`--rtl-path` accepts one `.sv`/`.v` file or a recursively scanned directory;
+`--include-path` may be repeated. Without `--output`, JSON is written to stdout.
+For each module, the report includes its source, reachable hierarchy scopes,
+signal declaration lines, and either `module_input` or
+`not_related_to_module_output`. Missing child-module sources are treated as
+conservative black boxes and listed under `warnings`.
 
 ## Host Interface
 

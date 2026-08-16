@@ -4,7 +4,7 @@ args = ["clean"]
 
 [tasks.build-all]
 command = "cargo"
-args = ["build", "--release"]
+args = ["build", "--all-targets", "--release"]
 
 [tasks.rebuild]
 dependencies = ["clean", "build-all"]
