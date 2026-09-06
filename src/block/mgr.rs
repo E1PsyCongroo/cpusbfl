@@ -73,7 +73,7 @@ impl BlockManager {
             for event in cur_tree.clone().into_iter().event() {
                 match event {
                     NodeEvent::Enter(RefNode::GenerateBlockIdentifier(node)) => {
-                        if let Some(ident) = cur_tree.get_str(&node.nodes.0) {
+                        if let Some(ident) = cur_tree.get_str_trim(&node.nodes.0) {
                             scope_prefix.push(ident.trim().to_string());
                         }
                     }
@@ -156,7 +156,7 @@ fn get_module_name(tree: &SyntaxTree) -> Option<String> {
             RefNode::ModuleDeclarationNonansi(x) => {
                 if let Some(RefNode::Identifier(identifier)) = unwrap_node!(x, Identifier) {
                     let identifier = identifier.clone();
-                    if let Some(name) = tree.get_str(&identifier) {
+                    if let Some(name) = tree.get_str_trim(&identifier) {
                         return Some(name.trim().to_string());
                     }
                 }
@@ -164,7 +164,7 @@ fn get_module_name(tree: &SyntaxTree) -> Option<String> {
             RefNode::ModuleDeclarationAnsi(x) => {
                 if let Some(RefNode::Identifier(identifier)) = unwrap_node!(x, Identifier) {
                     let identifier = identifier.clone();
-                    if let Some(name) = tree.get_str(&identifier) {
+                    if let Some(name) = tree.get_str_trim(&identifier) {
                         return Some(name.trim().to_string());
                     }
                 }
@@ -180,7 +180,7 @@ fn get_module_name_from_instantiation(
     inst: &sv_parser::ModuleInstantiation,
 ) -> Option<String> {
     if let Some(RefNode::ModuleIdentifier(identifier)) = unwrap_node!(inst, ModuleIdentifier) {
-        tree.get_str(&identifier.nodes.0)
+        tree.get_str_trim(&identifier.nodes.0)
             .map(|s| s.trim().to_string())
     } else {
         None
@@ -194,7 +194,7 @@ fn get_dut_name_from_instantiation(
     if let Some(RefNode::HierarchicalInstance(instance)) = unwrap_node!(inst, HierarchicalInstance)
     {
         if let Some(RefNode::NameOfInstance(identifier)) = unwrap_node!(instance, NameOfInstance) {
-            tree.get_str(&identifier.nodes.0.nodes.0)
+            tree.get_str_trim(&identifier.nodes.0.nodes.0)
                 .map(|s| s.trim().to_string())
         } else {
             None
